@@ -15,7 +15,7 @@ collector.py  → parser.py   → extractor.py → sheets.py
 2. 키를 복사해 두세요. 아래 `.env`와 GitHub Secrets에 넣어요.
 3. 예상 비용: 기사 1건에 약 $0.0005, 한 달 약 $0.3 (하루 20건 기준).
 
-Gemini를 쓰려면 `config.yaml`의 `llm.provider`를 `gemini`로 바꾸고 `GEMINI_API_KEY`를 넣으면 돼요. 단, 무료 등급은 하루 20번 정도만 호출할 수 있어서 매일 실행하기에는 부족해요.
+**Gemini 자동 대체:** Claude의 월 사용 한도나 크레딧이 다 떨어지면, 그 실행의 나머지 기사는 자동으로 Gemini 무료 등급(`gemini-3.8-flash`, 하루 약 20회)으로 처리해요. https://aistudio.google.com/apikey 에서 키를 받아 `.env`와 GitHub Secrets에 `GEMINI_API_KEY`로 넣어 두세요. 키가 없으면 대체 없이 Claude만 써요. Claude 한도를 다시 올리면 다음 실행부터 자동으로 Claude를 먼저 써요. 두 서비스가 모두 한도에 걸리면 실행을 멈추고, 남은 기사는 다음 실행으로 넘기고, 실패 이메일을 보내요.
 
 ### 2. Google 서비스 계정 (프로그램이 시트에 쓰기 위한 계정)
 1. https://console.cloud.google.com 에서 새 프로젝트를 만들어요. 예: `deal-flow`
@@ -46,6 +46,7 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
    | `ANTHROPIC_API_KEY` | Anthropic API 키 |
    | `GOOGLE_SERVICE_ACCOUNT_JSON` | `service-account.json` 파일 **내용 전체**를 붙여넣기 |
    | `SHEET_ID` | 시트 ID |
+   | `GEMINI_API_KEY` | (선택) Gemini 키. Claude 한도가 찼을 때 자동으로 대신 써요. |
 3. **Actions → News Tracker → Run workflow**로 한 번 수동 실행해 확인해요.
 4. 이후에는 매일 **오전 7시 PT**(미국 태평양 시간, 서머타임 자동 반영)에 자동으로 실행돼요. 이전에 기록한 행은 그대로 두고 새 회사만 아래에 추가해요. 실행이 실패하면 GitHub이 이메일을 보내요.
 

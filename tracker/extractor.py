@@ -147,9 +147,34 @@ PROVIDERS = {
 }
 
 
-def make_extractor(config: dict, env: dict):
-    provider = config["llm"]["provider"]
-    cls, key_var = PROVIDERS[provider]
-    if not env.get(key_var):
-        raise SystemExit(f"{key_var} is not set (needed for llm.provider: {provider})")
-    return cls(env[key_var], config["llm"][provider])
+class FallbackExtractor:
+    """Uses the first provider until its quota runs out, then moves to the next one for the rest of the run."""
+
+    def __init__(self, providers: list[tuple[str, object]]):
+        self._providers = providers
+
+    def extract(self, article: Article, text: str) -> Extraction:
+        while True:
+            name, extractor = self._providers[0]
+            try:
+                return extractor.extract(article, text)
+            except QuotaExhausted as e:
+                if len(self._providers) == 1:
+                    raise
+                self._providers.pop(0)
+                log.warning("%s. Switching to %s for the rest of this run.", e, self._providers[0][0])
+
+
+def make_extractor(config: dict, env: dict) -> FallbackExtractor:
+    llm = config["llm"]
+    primary = llm["provider"]
+    chain = []
+    for name in [primary, *llm.get("fallbacks", [])]:
+        cls, key_var = PROVIDERS[name]
+        if not env.get(key_var):
+            if name == primary:
+                raise SystemExit(f"{key_var} is not set (needed for llm.provider: {name})")
+            log.warning("%s is not set, so the %s fallback is unavailable", key_var, name)
+            continue
+        chain.append((name, cls(env[key_var], llm[name])))
+    return FallbackExtractor(chain)
