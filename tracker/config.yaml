@@ -1,0 +1,50 @@
+# News Tracker settings. Secrets live in environment variables, not here.
+
+# Only articles published within this window are considered (URL dedup makes overlap harmless).
+lookback_hours: 48
+
+# Only the start of each article is sent to Gemini; funding details are almost always up top.
+max_article_chars: 6000
+
+# An article that fails extraction this many times is marked "failed" and no longer retried.
+max_attempts_per_article: 3
+
+# Same company + same round within this many days counts as the same funding event
+# (PR Newswire and TechCrunch often report one round on different days).
+dedup_window_days: 7
+
+gemini:
+  model: gemini-3.8-flash
+  min_seconds_between_calls: 4
+  max_retries: 3
+
+http:
+  timeout_seconds: 20
+  # Connect over IPv4 only. On networks with broken IPv6 every request otherwise stalls ~40s first.
+  ipv4_only: true
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+
+sources:
+  - name: TechCrunch
+    url: https://techcrunch.com/tag/funding/feed/
+  - name: TechCrunch
+    url: https://techcrunch.com/category/venture/feed/
+  - name: PR Newswire
+    url: https://www.prnewswire.com/rss/financial-services-latest-news/venture-capital-list.rss
+  - name: Crunchbase News
+    url: https://news.crunchbase.com/feed/
+  - name: VentureBeat
+    url: https://venturebeat.com/feed/
+    # Disabled: the feed answers with a bot challenge (HTTP 429) as of 2026-10-22.
+    enabled: false
+
+# An RSS item is a candidate if its title or summary matches any of these (case-insensitive regex).
+keywords:
+  - '\brais(e|es|ed|ing)\b'
+  - '\bfunding\b'
+  - '\bfundrais(e|es|ed|ing)\b'
+  - '\bseries [a-h]\b'
+  - '\bpre-?seed\b'
+  - '\bseed (round|funding|financing)\b'
+  - '\bventure (funding|round|financing)\b'
+  - '\b(secures?|closes?|lands?|nabs?|bags?)\b.{0,40}\$\s?\d'

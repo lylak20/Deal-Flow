@@ -1,0 +1,5 @@
+tracker/.venv/
+tracker/.env
+tracker/service-account*.json
+__pycache__/
+.pytest_cache/

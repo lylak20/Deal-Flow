@@ -1,0 +1,232 @@
+# News Tracker — 시스템 설계
+
+> 출처: Google Docs "AI Agent 만들기"의 Claude Code 프롬프트 (VC Fundraising Tracker)
+> 상태: 1단계 구현 완료 (`tracker/`) · Gemini/Sheets 실제 연결은 키 발급 후 확인 필요 · 2026-10-22
+
+---
+
+## 1. 한 줄 요약
+
+GitHub Actions가 매일 Python 스크립트를 실행 → TechCrunch / PR Newswire RSS에서 새 기사 수집 → Gemini가 펀딩 정보만 JSON으로 추출 → Google Sheets에 **추가만(append)** 한다.
+기존 Deal Flow 웹사이트(Vercel)는 이 시트를 **읽어서 보여주는 화면**으로 바뀐다.
+
+```
+ ┌──────────────── GitHub Actions (매일 2회, 무료) ────────────────┐
+ │                                                               │
+ │  1. News Collector  →  2. Article Parser  →  3. Fundraise     │
+ │     (RSS 수집,           (기사 본문           Extractor        │
+ │      키워드 필터,          가져오기)            (Gemini JSON)    │
+ │      URL 중복 제거)                              │             │
+ │                                                  ▼             │
+ │                                       4. Spreadsheet Updater   │
+ │                                          (이벤트 중복 제거,       │
+ │                                           append only)         │
+ └──────────────────────────────────────────────┬────────────────┘
+                                                ▼
+                         Google Sheet "VC Fundraising Tracker"
+                         ├─ Raw Database        (펀딩 이벤트 1건 = 1행)
+                         ├─ Funding Dashboard   (수식으로 자동 생성)
+                         ├─ Article Log         (처리한 기사 기록)
+                         └─ 3-Month Alerts      (수식, 2단계)
+                                                ▲
+                                                │ 읽기 전용
+                         Deal Flow 웹사이트 (Vercel) — api/fetch-funding.js
+```
+
+---
+
+## 2. 확인한 사실 (2026-10-22 기준 실제 요청으로 확인)
+
+| 소스 | RSS URL | 항목 수 | 커버 기간 |
+|---|---|---|---|
+| TechCrunch – Funding 태그 | `https://techcrunch.com/tag/funding/feed/` | 20 | 며칠 (일부 오래된 고정 글 섞임) |
+| TechCrunch – Venture 카테고리 | `https://techcrunch.com/category/venture/feed/` | 20 | 며칠 |
+| PR Newswire – Venture Capital | `https://www.prnewswire.com/rss/financial-services-latest-news/venture-capital-list.rss` | 20 | **약 34시간** |
+
+**설계에 미치는 영향:** PR Newswire 피드는 20개 항목이 약 하루 반 분량이다. 하루 1번만 돌다가 한 번 실패하면 기사를 놓친다. → **하루 2번(예: 한국시간 오전 7시, 오후 7시) 실행**하고, 중복은 기사 URL로 걸러낸다.
+
+PR Newswire VC 피드에는 ETF 출시, ARR 발표 같은 펀딩 외 보도자료도 섞여 있다. 그래서 키워드 필터 + Gemini 판별을 둘 다 거친다.
+
+---
+
+## 3. 컴포넌트별 설계
+
+### 3.1 News Collector (`collector.py`)
+- 소스 목록은 `config.yaml`에 둔다. 나중에 Crunchbase News / VentureBeat를 다시 넣을 때 코드를 고칠 필요가 없다.
+- `feedparser`로 RSS를 파싱한다.
+- **1차 필터 (무료):** 제목과 요약에 다음 키워드 중 하나라도 있어야 통과한다.
+  `raised, raises, funding, fundraise, fundraising, series a/b/c/d/e, seed round, pre-seed, venture funding`
+- **기간 필터:** 발행 후 48시간 이내 (설정 가능). 문서에는 "24시간"이라고 되어 있지만, 실행 시각이 어긋나도 놓치지 않게 여유를 둔다. 중복은 URL로 제거되므로 결과는 같다.
+- **URL 중복 제거:** `Article Log` 시트에 이미 있는 URL(쿼리스트링, utm 제거 후 비교)은 건너뛴다.
+- **처리 전에 메타데이터 저장:** 새 기사를 `Article Log`에 `status=pending`으로 먼저 기록한다. 프롬프트의 "Store article metadata before processing" 요구사항이다. 중간에 실패해도 다음 실행에서 `pending`/`error` 상태부터 다시 처리할 수 있다.
+
+### 3.2 Article Parser (`parser.py`)
+- 기사 URL을 가져와 본문을 추출한다 (`trafilatura` 사용, 실패하면 RSS 요약으로 대체).
+- Gemini 비용을 줄이려고 본문은 앞부분 약 6,000자만 보낸다. 펀딩 정보는 거의 항상 첫 몇 문단에 있다.
+
+### 3.3 Fundraise Extractor (`extractor.py`) — Gemini
+- Gemini API의 **구조화 출력(response schema)** 으로 항상 같은 형태의 JSON을 받는다.
+- 모델: Flash 계열의 최신 버전. 정확한 모델 ID는 구현할 때 Gemini 문서에서 확인하고 `config.yaml`에 둔다.
+- 출력 스키마 (프롬프트 예시 + 필터링용 필드 2개 추가):
+
+```json
+{
+  "is_funding_event": true,
+  "company": "Eka Robotics",
+  "round": "Series A",
+  "amount": "$150M",
+  "date": "2026-10-20",
+  "lead_investor": "a16z",
+  "other_investors": ["F-Prime"],
+  "category": "Robotics"
+}
+```
+
+- `is_funding_event=false`이면 저장하지 않는다 (인수, 파트너십, 제품 출시, 인사 발표 등). `Article Log`에는 `skipped_not_funding`으로 남긴다.
+- 기사 하나에 여러 회사의 펀딩이 나오면 (예: 주간 펀딩 정리 기사) 배열로 받고 각각 한 행씩 저장한다.
+- **라운드 정규화 (Python에서 처리):** Gemini가 준 값을 다음 중 하나로 맞춘다.
+  `Pre-Seed · Seed · Series A · Series B · Series C · Series D · Series E+ · Growth · Late Stage · Undisclosed`
+  (Series E/F/G… → `Series E+`)
+- **금액 정규화:** `$150M`, `$1.2B` 형식. 원화·유로 등은 원래 통화 그대로 둔다 (예: `€20M`). 공개되지 않았으면 `Undisclosed`.
+- **날짜:** 기사에 날짜가 없으면 기사 발행일을 쓴다.
+- 비용: 하루 펀딩 후보 기사는 30~60건 정도라서 Gemini 무료 사용량 안에 들어갈 가능성이 높다. 분당 호출 제한에 걸리지 않게 호출 사이에 간격을 두고, 실패하면 재시도한다.
+
+### 3.4 Spreadsheet Updater (`sheets.py`)
+- 인증: Google Cloud **서비스 계정** JSON 키를 쓴다. 시트를 서비스 계정 이메일에 "편집자"로 공유한다.
+- **이벤트 중복 제거 (프롬프트 규칙):** `정규화된 회사명 + 라운드 + 발표일`이 같으면 건너뛴다.
+  - 회사명 정규화: 소문자로 바꾸고 `Inc, Labs, AI, Robotics` 같은 접미사를 떼고 공백과 기호를 제거한다. (`Eka` = `Eka Robotics`)
+- **append만 한다.** 기존 행을 수정하거나 삭제하는 코드 경로가 아예 없게 만든다.
+- 한 번 실행할 때 모은 행을 `append_rows` 한 번으로 저장한다 (API 호출 횟수 최소화).
+
+---
+
+## 4. Google Sheet 구조
+
+### Sheet 1: `Raw Database` (프롬프트 그대로)
+| Date | Company | Funding Round | Amount Raised | Lead Investor | Other Investors | Category | Source | Article URL | Date Added |
+|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-20 | Eka Robotics | Series A | $150M | a16z | F-Prime | Robotics | TechCrunch | https://… | 2026-10-20 |
+
+### Sheet 2: `Funding Dashboard` — 수식으로 자동 생성
+열마다 `FILTER` 수식 하나씩 둔다. Raw Database에 행이 추가되면 대시보드가 바로 따라 바뀌고, Python은 이 시트를 건드리지 않는다. 따라서 "기존 기록을 덮어쓰지 않는다"는 조건을 구조적으로 지킨다.
+
+```
+A1: Pre-Seed     A2: =IFERROR(SORT(FILTER('Raw Database'!B2:B & " (" & TEXT('Raw Database'!A2:A,"yyyy-mm-dd") & ")", 'Raw Database'!C2:C="Pre-Seed"), 1, FALSE), "")
+B1: Seed         B2: (같은 수식, "Seed")
+...
+G1: Series E+    G2: (같은 수식, "Series E+")
+```
+(최신 날짜가 위로 오도록 날짜 기준 정렬)
+
+### Sheet 3: `Article Log` (추가 — 중복 제거 및 재처리용)
+| Article URL | Source | Title | Published | Fetched At | Status | Error |
+|---|---|---|---|---|---|---|
+
+`Status`: `pending` → `extracted` / `skipped_not_funding` / `error`
+
+### Sheet 4: `3-Month Alerts` (2단계 — 원래 계획 문서의 "3 month Alert")
+수식으로 펀딩 후 90~97일이 지난 회사를 보여준다. 이메일·Slack 알림은 3단계에서 붙인다.
+
+### 데이터가 너무 많아지지 않을까? (문서에 있던 질문)
+- 예상량: 하루 펀딩 이벤트 10~30건 → 1년 약 4,000~11,000행 × 10열 ≈ 11만 셀.
+- Google Sheets 한도는 시트 하나당 1,000만 셀이다. **몇 년 써도 Sheets로 충분하다.**
+- Supabase(Postgres)는 웹사이트에서 복잡한 검색이나 점수화(Opportunity Scoring)가 필요해질 때 옮기면 된다. Updater를 인터페이스로 분리해 두면 저장소만 바꿔 끼울 수 있다.
+
+---
+
+## 5. 실행 환경 — "손대지 않아도 매일 돌아가는가?"
+
+| 선택지 | 장점 | 단점 | 결론 |
+|---|---|---|---|
+| **GitHub Actions cron** | 무료(비공개 저장소 월 2,000분, 이 작업은 월 약 100분), Python 그대로 실행, Secrets 관리 내장, 실패하면 이메일로 알림 | 실행 시각이 몇 분 늦을 수 있음 | ✅ **채택** |
+| Vercel Cron + Python 함수 | 웹사이트와 같은 곳에서 관리 | Hobby 플랜은 cron이 하루 1회로 제한되고 함수 실행 시간 제한이 있음. 기사 수십 개를 처리하다 시간 초과 위험 | ❌ |
+| 내 PC 작업 스케줄러 | 간단함 | PC가 꺼져 있으면 실행 안 됨 | ❌ |
+
+- `.github/workflows/news-tracker.yml`: `schedule: cron` (UTC 22:00, 10:00 = 한국시간 07:00, 19:00) + 수동 실행 버튼 `workflow_dispatch`.
+- Secrets: `GEMINI_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `SHEET_ID`.
+- 주의: **공개** 저장소는 60일 동안 활동이 없으면 예약 실행이 자동으로 꺼진다. 비공개 저장소로 쓰는 것을 권장한다.
+- 실패 처리: 소스 하나가 실패해도 나머지는 계속 진행한다. 실행이 끝나면 요약(수집 N / 펀딩 M / 저장 K / 오류 E)을 Actions 로그에 남긴다. 오류가 있으면 job을 실패로 표시해 GitHub이 이메일을 보내게 한다.
+
+---
+
+## 6. 프로젝트 구조
+
+기존 Deal Flow 저장소 안에 `tracker/` 폴더를 따로 만든다. 웹사이트(Node/Vercel)와 수집기(Python/GitHub Actions)가 같은 저장소에 있지만 서로 영향을 주지 않는다.
+
+```
+Deal Flow/
+├── index.html                  # 기존 웹사이트 (2단계에서 시트 데이터를 보여주도록 수정)
+├── api/fetch-funding.js        # 기존 → 2단계에서 "시트 읽기"로 변경
+├── vercel.json
+├── .vercelignore               # 새로 추가: tracker/ 를 Vercel 배포에서 제외
+├── .github/workflows/
+│   └── news-tracker.yml        # 매일 2회 실행
+├── docs/
+│   └── news-tracker-design.md  # 이 문서
+└── tracker/
+    ├── README.md               # 설정 방법 (서비스 계정, 시트 공유, Secrets)
+    ├── requirements.txt        # feedparser, trafilatura, google-genai, gspread, pyyaml, python-dotenv
+    ├── .env.example
+    ├── config.yaml             # 소스 URL, 키워드, 조회 기간, 모델 ID
+    ├── main.py                 # 전체 흐름 실행 (--dry-run 지원)
+    ├── collector.py
+    ├── parser.py
+    ├── extractor.py
+    ├── normalize.py            # 라운드, 금액, 회사명 정규화 + 중복 판단 키 생성
+    ├── sheets.py
+    ├── setup_sheet.py          # 최초 1회: 시트 4개 + 헤더 + 대시보드 수식 생성
+    └── tests/
+        ├── fixtures/           # 실제 RSS, 기사 샘플
+        └── test_normalize.py   # 중복 판단 규칙 테스트 (Eka 예시 포함)
+```
+
+---
+
+## 7. 기존 코드(`api/fetch-funding.js`)와의 관계
+
+### 지금 상태 분석
+| 항목 | 현재 방식 | 문제 |
+|---|---|---|
+| 소스 | TechCrunch Venture, Crunchbase News, VentureBeat RSS | PR Newswire 없음 |
+| 추출 | 정규식 (`/series[\s-]?a/i`, 제목에서 "raises" 앞부분을 회사명으로 사용) | Seed, A, B만 인식. "series about"처럼 엉뚱한 단어도 걸림. 투자자를 추출하지 못함. 인수 기사도 섞임 |
+| 저장 | 브라우저 `localStorage` | 다른 기기나 브라우저에서는 데이터가 안 보임. 브라우저 데이터를 지우면 사라짐. 문서에 적힌 "매번 다시 검색" 문제의 원인 |
+| 실행 | 사용자가 "Get an Update" 버튼을 누를 때만 | 자동 실행 아님 |
+| 커밋 안 된 변경 | `SEVEN_DAYS_AGO`를 7일 → 180일로 변경 | RSS는 최근 20개뿐이라 180일로 늘려도 실제로 더 가져오지 못함. 변수 이름도 실제 값과 맞지 않음 |
+
+### 연결 방식 (단계별)
+1. **1단계 — 독립 실행:** Python 트래커만 만든다. 기존 웹사이트는 그대로 두고 두 결과를 나란히 비교한다. 정확도 검증 기간이다.
+2. **2단계 — 웹사이트가 시트를 읽음:** `api/fetch-funding.js`의 내용을 "Google Sheets API로 `Raw Database`를 읽어 JSON으로 반환"하도록 바꾼다.
+   - 응답 형태(`{ company, stage, amount, url, pubDate, articleUrl }`)를 그대로 유지하면 `index.html`은 거의 고치지 않아도 된다. 필드 매핑: `stage←Funding Round`, `pubDate←Date`, `articleUrl←Article URL`. 투자자와 카테고리 필드는 추가한다.
+   - 정규식 추출 코드와 RSS 수집 코드는 삭제한다. Python 트래커가 유일한 수집기가 된다.
+   - `index.html`: `localStorage` 병합 로직을 제거하고(시트가 원본), 필터에 Pre-Seed / C / D / E+를 추가하고, 투자자 열을 추가한다.
+   - Vercel 환경변수에 같은 서비스 계정 키를 넣는다 (읽기 전용 권한이면 충분).
+3. **3단계:** 3-Month Alerts 알림 보내기, 회사를 클릭하면 이메일 초안 자동 작성, Opportunity Scoring.
+
+이렇게 하면 원래 문서의 목표인 "Claude에 종속되지 않는 시스템"과 Interview Simulator의 문제들(Claude API 비용, 저장 안 됨)도 함께 해결된다. 실행 비용은 Gemini 무료 사용량 + GitHub Actions 무료 + Google Sheets 무료다.
+
+---
+
+## 8. 구현 순서 (프롬프트의 "한 번에 하나씩")
+
+1. `setup_sheet.py` + `sheets.py` → 빈 시트 생성, 테스트 행 1개 append
+2. `collector.py` → `--dry-run`으로 후보 기사 목록만 출력
+3. `parser.py` + `extractor.py` → 실제 기사 5개로 JSON 추출 품질 확인
+4. `normalize.py` + 테스트 → 중복 규칙 검증
+5. `main.py` 전체 연결 → 로컬에서 1회 실제 실행
+6. GitHub Actions 등록 → 수동 실행 1회, 다음 날 자동 실행 확인
+7. (2단계) `api/fetch-funding.js`, `index.html` 전환
+
+---
+
+## 9. 확정된 결정 (2026-10-22)
+
+1. **소스:** TechCrunch(Funding 태그 + Venture 카테고리), PR Newswire, Crunchbase News를 쓴다. VentureBeat도 유지하기로 했지만 현재 피드가 봇 차단 확인 화면(HTTP 429)을 돌려줘서 `config.yaml`에서 `enabled: false`로 꺼 두었다. 차단 우회는 하지 않는다.
+2. **중복 판단:** 같은 회사 + 같은 라운드가 **±7일** 안에 있으면 중복으로 본다 (`dedup_window_days: 7`).
+3. **저장소:** GitHub 비공개 저장소로 운영한다.
+4. **Gemini 모델:** `gemini-3.8-flash` (2026-09 GA, 현재 최신 Flash 모델). `config.yaml`에서 바꿀 수 있다.
+5. **준비물 (직접 해야 하는 것):** Gemini API 키 발급, Google Cloud 서비스 계정 생성, 시트 공유. 단계별 방법은 [tracker/README.md](../tracker/README.md)에 있다.
+
+## 10. 구현하면서 바뀐 점
+- **IPv4 전용 연결 (`http.ipv4_only`):** 개발 PC는 IPv6가 막혀 있어서 요청마다 약 40초씩 지연됐다. IPv4만 쓰도록 바꾼 뒤 수집 시간이 2분에서 3초로 줄었다.
+- **3-Month Alerts 탭은 아직 만들지 않았다.** 2단계에서 추가한다.
+- **job 실패 기준:** 피드 하나만 실패하면 경고만 남긴다. job을 실패로 표시하는 경우는 모든 피드를 읽지 못했거나, 기사가 3번 재시도 후에도 실패(`failed`)했을 때뿐이다. 일시적인 오류는 다음 실행에서 자동으로 재시도한다.
