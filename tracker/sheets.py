@@ -35,7 +35,19 @@ class LogEntry:
 def open_spreadsheet() -> gspread.Spreadsheet:
     """GOOGLE_SERVICE_ACCOUNT_JSON may hold the key JSON itself (GitHub Actions) or a path to it (local)."""
     raw = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"].strip()
-    info = json.loads(raw if raw.startswith("{") else Path(raw).read_text(encoding="utf-8"))
+    if not raw.startswith("{"):
+        path = Path(raw)
+        if not path.is_absolute():
+            # Relative paths in .env are relative to tracker/, wherever the script is started from.
+            path = Path(__file__).parent / path
+        if not path.exists():
+            raise SystemExit(
+                f"GOOGLE_SERVICE_ACCOUNT_JSON is '{raw}', but no such key file exists. "
+                "Locally, point it at the downloaded key file. In GitHub Secrets, paste the file's "
+                "entire JSON content (starting with '{'), not its name."
+            )
+        raw = path.read_text(encoding="utf-8")
+    info = json.loads(raw)
     return gspread.service_account_from_dict(info).open_by_key(os.environ["SHEET_ID"])
 
 
