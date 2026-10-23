@@ -1,6 +1,6 @@
 """4. Spreadsheet Updater: the Google Sheet is the database.
 
-Raw Database only grows, except that a later, more complete report of the same round replaces its row.
+Each database tab only grows, except that a later, more complete report of the same round replaces its row.
 """
 
 import json
@@ -9,14 +9,22 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import gspread
 
 from collector import Article
 from normalize import EventRecord, event_key
 
+# Two databases with the same columns, filled from one run (see config "tracks"):
+#   "all":      every sector, from TechCrunch, PR Newswire and Crunchbase News
+#   "robotics": robotics rounds only, from all sources incl. trade press and Google News
 RAW = "Raw Database"
+ROBOTICS = "Robotics Database"
+TABS = {"all": RAW, "robotics": ROBOTICS}
 DASHBOARD = "Funding Dashboard"
+ROBOTICS_DASHBOARD = "Robotics Dashboard"
+DASHBOARDS = {DASHBOARD: RAW, ROBOTICS_DASHBOARD: ROBOTICS}
 ARTICLE_LOG = "Article Log"
 EMAIL_TEMPLATE = "Email Template"
 
@@ -24,7 +32,7 @@ EMAIL_TEMPLATE = "Email Template"
 # produces the other columns (see main.event_rows, which leaves Email out).
 RAW_HEADERS = [
     "Date", "Email", "Company", "Funding Round", "Amount Raised", "Valuation", "Lead Investor",
-    "Other Investors", "Category", "Source", "Article URL", "Date Added",
+    "Other Investors", "Category", "Source", "Article URL", "Date Added", "Website",
 ]
 DATA_HEADERS = [h for h in RAW_HEADERS if h != "Email"]
 LOG_HEADERS = ["Article URL", "Source", "Title", "Published", "Fetched At", "Status", "Attempts", "Error"]
@@ -42,7 +50,7 @@ Best,
 
 
 def col(header: str) -> str:
-    """Column letter of a Raw Database header (the sheet has fewer than 26 columns)."""
+    """Column letter of a database header (both database tabs share RAW_HEADERS; fewer than 26 columns)."""
     return chr(ord("A") + RAW_HEADERS.index(header))
 
 
@@ -103,6 +111,23 @@ def add_email_buttons(ws: gspread.Worksheet, first_row: int, last_row: int) -> N
                   f"{EMAIL_COL}{first_row}:{EMAIL_COL}{last_row}", value_input_option="USER_ENTERED")
 
 
+def company_link(values: dict[str, str]) -> str:
+    """The company's website when the article gave one, else a web search for it (one click to pick the site)."""
+    if values.get("Website"):
+        return values["Website"]
+    query = f'{values.get("Company", "")} {values.get("Category", "")} official website'.strip()
+    return "https://www.google.com/search?q=" + quote_plus(query)
+
+
+def add_company_links(ws: gspread.Worksheet, rows: list[tuple[int, dict[str, str]]]) -> None:
+    """Make each Company cell a link (cell formatting, so the value stays the plain company name)."""
+    c = col("Company")
+    formats = [{"range": f"{c}{row}", "format": {"textFormat": {"link": {"uri": company_link(values)}}}}
+               for row, values in rows if values.get("Company")]
+    if formats:
+        ws.batch_format(formats)
+
+
 def _first_row(append_response: dict) -> int:
     # e.g. "'Article Log'!A12:H14" -> 12
     rng = append_response["updates"]["updatedRange"]
@@ -111,12 +136,12 @@ def _first_row(append_response: dict) -> int:
 
 class SheetStore:
     def __init__(self, spreadsheet: gspread.Spreadsheet):
-        self._raw = spreadsheet.worksheet(RAW)
+        self._db = {track: spreadsheet.worksheet(tab) for track, tab in TABS.items()}
         self._log = spreadsheet.worksheet(ARTICLE_LOG)
 
-    def existing_records(self) -> list[EventRecord]:
-        """Every round already in Raw Database, read by header name, with its sheet row."""
-        values = self._raw.get_all_values()
+    def existing_records(self, track: str) -> list[EventRecord]:
+        """Every round already in that track's database tab, read by header name, with its sheet row."""
+        values = self._db[track].get_all_values()
         if not values:
             return []
         header = values[0]
@@ -132,10 +157,10 @@ class SheetStore:
             ))
         return records
 
-    def delete_rows(self, rows: list[int]) -> None:
-        """Delete Raw Database rows, bottom first so the other row numbers stay valid."""
+    def delete_rows(self, track: str, rows: list[int]) -> None:
+        """Delete database rows, bottom first so the other row numbers stay valid."""
         for row in sorted(set(rows), reverse=True):
-            self._raw.delete_rows(row)
+            self._db[track].delete_rows(row)
 
     def article_log(self) -> dict[str, LogEntry]:
         entries = {}
@@ -161,16 +186,18 @@ class SheetStore:
         start = _first_row(self._log.append_rows(rows, value_input_option="RAW", table_range="A1"))
         return {a.url: LogEntry(row=start + i, article=a, status="pending", attempts=0) for i, a in enumerate(articles)}
 
-    def append_events(self, rows: list[dict[str, str]]) -> None:
-        """rows: {header: value} for every Raw Database column except Email."""
+    def append_events(self, track: str, rows: list[dict[str, str]]) -> None:
+        """rows: {header: value} for every database column except Email."""
         if not rows:
             return
+        ws = self._db[track]
         # Data goes in RAW so nothing is reinterpreted (dates stay text, "=..." names stay text) ...
-        resp = self._raw.append_rows([[r.get(h, "") for h in RAW_HEADERS] for r in rows],
-                                     value_input_option="RAW", table_range="A1")
-        # ... and only the Email buttons are written as formulas.
+        resp = ws.append_rows([[r.get(h, "") for h in RAW_HEADERS] for r in rows],
+                              value_input_option="RAW", table_range="A1")
+        # ... and only the Email buttons are formulas; Company links are cell formatting.
         start = _first_row(resp)
-        add_email_buttons(self._raw, start, start + len(rows) - 1)
+        add_email_buttons(ws, start, start + len(rows) - 1)
+        add_company_links(ws, [(start + i, r) for i, r in enumerate(rows)])
 
     def update_statuses(self, updates: list[tuple[int, str, int, str]]) -> None:
         """updates: (row, status, attempts, error)."""

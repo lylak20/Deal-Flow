@@ -247,5 +247,18 @@ Deal Flow/
   - **LLM 예산:** Claude는 11-01까지 한도가 막혀 있고 Gemini 무료 등급은 모델당 하루 약 20회라서 예산을 둔다. 처리 순서는 소스 `priority`(TechCrunch·PR Newswire 1)이고, 실행당 최대 `max_llm_calls_per_run` 회만 호출한다. 같은 회사를 다룬 기사는 한 번만 호출하고(`guess_company`), Google News 헤드라인은 최근 기록된 회사이거나 오래된 것이면 건너뛴다.
   - **Google News 소스 키워드:** 헤드라인의 "raises"가 펀딩이 아닌 경우가 많아서(raises doubts/toll/advisory), 소스별 `keywords`로 금액이나 펀딩 단어를 요구한다.
   - **2026-10-23 드라이런:** 8개 소스, 후보 22건, 같은 소식 건너뛰기 후 예상 LLM 호출은 약 15회다.
+- **데이터베이스를 두 탭으로 분리 + 회사 웹사이트 링크 (2026-10-23):** 두 방식이 각각 쓸모 있어서 한 시트에 섞지 않고 탭을 나눴다.
+  - **Raw Database** (`all` 트랙): 모든 분야, 소스는 TechCrunch·PR Newswire·Crunchbase News.
+  - **Robotics Database** (`robotics` 트랙): 로보틱스만, 소스는 전체. 대시보드도 탭마다 하나씩 있다(**Funding Dashboard**, **Robotics Dashboard**).
+  - **트랙 지정:** 소스마다 `tracks`로 정한다. 기사마다 LLM은 한 번만 부르고, 결과는 이렇게 나눈다. 해당 소스가 `all` 트랙이면 모든 라운드가 Raw Database로 간다. `in_focus`인 라운드는 소스와 상관없이 Robotics Database로 간다. 중복 제거와 교체 규칙은 탭마다 따로 적용한다.
+  - **기존 행 분리:** 로보틱스 전용 소스에서 온 7행은 Robotics Database로 옮겼다(복사한 뒤 확인하고 나서 원본을 삭제했다). 나머지 20행은 Raw Database에 남겼다. BOB 행은 Category에 투자자 목록이 잘못 들어가 있어서 Fintech로 고쳤다.
+  - **웹사이트:** `Website` 열을 맨 끝에 추가했다.
+    - 기사 링크 목록: parser가 본문 링크 가운데 뉴스·소셜이 아닌 사이트를 기사 끝에 "Links in the article"로 붙인다.
+    - LLM 선택과 확인: LLM은 그 목록이나 본문에서만 회사 사이트를 고른다. 코드는 그 도메인이 실제로 기사에 있었는지 확인한다(`verified_website`).
+    - 이름 매칭: LLM이 비워 두면 도메인에 회사명이 들어간 링크를 쓴다(`website_by_name`).
+    - Company 열 링크: 셀 서식으로 단다(값은 회사명 그대로). 웹사이트가 없으면 Google 검색 링크를 단다.
+    - 쓰지 않은 방법: DuckDuckGo `!ducky`(첫 결과로 바로 이동)는 신생 회사에서 뉴스 기사로 가서 쓰지 않았다.
+    - 기존 27행: LLM 없이 기사 링크로 채워서 6행(Legora, Blacksmith, Mave, Coast, 120ft, Dream Labs)이 실제 사이트에 연결됐다.
+  - **Sourcing 쪽 영향:** 다른 세션이 작업 중인 Sourcing 코드(`sourcing/store.py`)는 아직 커밋되지 않았다. 이 코드는 Raw Database만 읽기 때문에 로보틱스 전용 소스의 라운드는 보지 못한다.
 - **3-Month Alerts 탭은 아직 만들지 않았다.** 2단계에서 추가한다.
 - **job 실패 기준:** 피드 하나만 실패하면 경고만 남긴다. job을 실패로 표시하는 경우는 모든 피드를 읽지 못했거나, 기사가 3번 재시도 후에도 실패(`failed`)했을 때뿐이다. 일시적인 오류는 다음 실행에서 자동으로 재시도한다.

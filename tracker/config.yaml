@@ -42,7 +42,13 @@ http:
 # (after that day's priority-1 articles), so TechCrunch and PR Newswire are never crowded out.
 max_llm_calls_per_run: 30
 
-# Only rounds in this sector are recorded (rows added before 2026-10-23 may be from any sector).
+# One run fills two database tabs with the same columns (each source lists the tracks it feeds):
+#   all:      "Raw Database"      - every sector, TechCrunch + PR Newswire + Crunchbase News
+#   robotics: "Robotics Database" - robotics rounds only (the focus below), from every source
+# An article is extracted once; its rounds go to "all" if its source feeds that track, and to
+# "robotics" if the LLM marks them in_focus.
+#
+# The robotics track's sector definition:
 focus:
   name: Robotics
   # Pre-LLM filter: an article must match one of these in its title or summary (case-insensitive regex)
@@ -78,32 +84,42 @@ focus:
                Robot Components & Software, Other Robotics]
 
 # priority: lower is processed first; TechCrunch and PR Newswire are 1.
+# tracks: which database tabs the source feeds (see above). A source in "all" takes every funding
+#   article; for "robotics" the article must also match focus.keywords.
 # headline_only: the article page can't be read (Google News links), so only the headline is used.
 sources:
   - name: TechCrunch
     url: https://techcrunch.com/tag/funding/feed/
+    tracks: [all, robotics]
     priority: 1
   - name: TechCrunch
     url: https://techcrunch.com/category/venture/feed/
+    tracks: [all, robotics]
     priority: 1
   - name: PR Newswire
     url: https://www.prnewswire.com/rss/financial-services-latest-news/venture-capital-list.rss
+    tracks: [all, robotics]
     priority: 1
   - name: TechCrunch
     url: https://techcrunch.com/category/robotics/feed/
+    tracks: [robotics]
     priority: 2
   - name: The Robot Report
     url: https://www.therobotreport.com/feed/
+    tracks: [robotics]
     priority: 2
   - name: Robotics & Automation News
     url: https://roboticsandautomationnews.com/feed/
+    tracks: [robotics]
     priority: 2
   - name: Crunchbase News
     url: https://news.crunchbase.com/feed/
+    tracks: [all, robotics]
     priority: 2
   - name: Google News
     # Catch-all search across outlets (US, last day). Source column shows "<publisher> (via Google News)".
     url: https://news.google.com/rss/search?q=%28robotics+OR+robot+OR+humanoid+OR+drone+OR+autonomous%29+%28raises+OR+funding%29+when%3A1d&hl=en-US&gl=US&ceid=US:en
+    tracks: [robotics]
     priority: 3
     headline_only: true
     # Stricter than the global keywords: a bare "raises" in headlines is often "raises doubts/toll".
@@ -118,8 +134,8 @@ sources:
     # Disabled: the feed answers with a bot challenge (HTTP 429) as of 2026-10-22.
     enabled: false
 
-# An RSS item is a candidate if its title or summary matches any of these (case-insensitive regex)
-# and one of focus.keywords.
+# An RSS item is a candidate if its title or summary matches any of these (case-insensitive regex);
+# for the robotics track it must also match one of focus.keywords.
 keywords:
   - '\brais(e|es|ed|ing)\b'
   - '\bfunding\b'

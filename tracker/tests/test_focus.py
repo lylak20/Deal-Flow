@@ -40,9 +40,10 @@ def art(title, source="TechCrunch", priority=1, headline_only=False, hours_ago=1
                    NOW - timedelta(hours=hours_ago), priority, headline_only)
 
 
-def ev(company, in_focus=True, round_="Seed", amount="$10M", category="Industrial Automation"):
+def ev(company, in_focus=True, round_="Seed", amount="$10M", category="Industrial Automation", website=""):
     return FundingEvent(company=company, round=round_, amount=amount, valuation="", date="2026-10-23",
-                        lead_investor="", other_investors=[], category=category, in_focus=in_focus)
+                        lead_investor="", other_investors=[], category=category, website=website,
+                        in_focus=in_focus)
 
 
 class FakeExtractor:
@@ -66,7 +67,7 @@ def no_http(monkeypatch):
 def run(work_articles, fake, existing=None, budget=None):
     config = dict(CONFIG, **({"max_llm_calls_per_run": budget} if budget else {}))
     work = [(i + 2, a, 0) for i, a in enumerate(work_articles)]
-    existing = [] if existing is None else existing
+    existing = {"all": [], "robotics": existing or []}
     statuses, counts, quota = main.run_extraction(work, fake, existing, config, NOW)
     rows = {r: st for r, st, *_ in statuses}
     by_title = {a.title: rows.get(i + 2, "pending") for i, a in enumerate(work_articles)}
@@ -116,7 +117,7 @@ def test_priority_sources_go_first_when_the_budget_is_small():
     status, counts, _, existing = run([google, trade, tc, prn], fake, budget=2)
     assert fake.calls == [prn.title, tc.title]  # priority 1 first, newest first within a priority
     assert status[google.title] == status[trade.title] == "pending"
-    assert counts["left_pending"] == 2 and len(existing) == 2
+    assert counts["left_pending"] == 2 and len(existing["robotics"]) == 2
 
 
 def test_quota_exhausted_after_priority_sources_leaves_the_rest_pending():
@@ -158,14 +159,17 @@ def test_out_of_focus_rounds_are_not_written():
     fake = FakeExtractor({tc.title: Extraction(is_funding_announcement=True, events=[
         ev("Legora", in_focus=False, category="Legal Tech"), ev("Coco Robotics", category="Drones & Delivery")])})
     status, counts, _, existing = run([tc], fake)
-    assert [e.values["Company"] for e in existing] == ["Coco Robotics"]
+    assert [e.values["Company"] for e in existing["robotics"]] == ["Coco Robotics"]
+    # A TechCrunch article feeds the all-sector tab too, with every round in it.
+    assert [e.values["Company"] for e in existing["all"]] == ["Legora", "Coco Robotics"]
     assert status[tc.title] == "extracted"
 
-    only_other = art("Legora raises $550M with robotics-free AI", "TechCrunch", 1)
+    only_other = art("Legora raises $550M with robotics-free AI", "Robot Weekly", 2)
+    only_other.tracks = ("robotics",)  # a robotics-only source
     fake = FakeExtractor({only_other.title: Extraction(is_funding_announcement=True,
                                                        events=[ev("Legora", in_focus=False)])})
     status, counts, _, existing = run([only_other], fake)
-    assert existing == [] and status[only_other.title] == "skipped_not_in_focus"
+    assert existing == {"all": [], "robotics": []} and status[only_other.title] == "skipped_not_in_focus"
 
 
 def test_system_instruction_carries_the_focus_definition():
@@ -173,3 +177,93 @@ def test_system_instruction_carries_the_focus_definition():
     text = system_instruction(focus)
     assert "Focus sector: Robotics" in text and "Exclude defense." in text and '"Drones & Delivery"' in text
     assert "Focus sector" not in system_instruction(None)
+
+
+# --- Two database tabs and company websites -------------------------------------------------------------
+
+def test_collect_tags_each_article_with_the_tracks_it_qualifies_for(monkeypatch):
+    import collector
+
+    feed = b"""<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>
+    <item><title>Legora raises $550M Series E</title><link>https://example.com/legora</link>
+      <pubDate>Fri, 23 Oct 2026 12:00:00 GMT</pubDate></item>
+    <item><title>Coco Robotics raises $80M</title><link>https://example.com/coco</link>
+      <pubDate>Fri, 23 Oct 2026 12:00:00 GMT</pubDate></item>
+    </channel></rss>"""
+
+    class Resp:
+        content = feed
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(collector.requests, "get", lambda *a, **k: Resp())
+    config = {
+        "lookback_hours": 48, "http": {"user_agent": "t", "timeout_seconds": 1},
+        "keywords": [r"\braises\b"], "focus": {"keywords": ["robot"]},
+        "sources": [{"name": "TechCrunch", "url": "u1", "priority": 1, "tracks": ["all", "robotics"]},
+                    {"name": "The Robot Report", "url": "u2", "priority": 2, "tracks": ["robotics"]}],
+    }
+    found, failed = collector.collect(config, NOW)
+    by_url = {a.url: a for a in found}
+    # Same URLs in both feeds: the higher-priority copy is kept, qualified for every track either feed gave.
+    assert by_url["https://example.com/legora"].tracks == ("all",)
+    assert by_url["https://example.com/coco"].tracks == ("all", "robotics")
+    assert by_url["https://example.com/coco"].source == "TechCrunch" and failed == []
+
+
+def test_source_tracks_for_retries():
+    config = {"sources": [{"name": "Crunchbase News", "tracks": ["all", "robotics"]},
+                          {"name": "Google News", "tracks": ["robotics"]}]}
+    assert main.source_tracks(config, "Crunchbase News") == ("all", "robotics")
+    assert main.source_tracks(config, "Axios (via Google News)") == ("robotics",)
+    assert main.source_tracks(config, "Unknown") == ("all", "robotics")
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.formic.co/about?x=1", "https://formic.co"),
+    ("formic.co", "https://formic.co"),
+    ("https://www.linkedin.com/company/formic", ""),
+    ("https://techcrunch.com/2026/10/23/x", ""),
+    ("", ""),
+    ("not a url", ""),
+])
+def test_company_website(url, expected):
+    from normalize import company_website
+    assert company_website(url) == expected
+
+
+def test_website_is_kept_only_if_the_article_mentions_it():
+    text = "Formic raises $50M ...\n\nLinks in the article:\nhttps://formic.co\nhttps://a16z.com"
+    assert main.verified_website(ev("Formic", website="https://www.formic.co/"), text) == "https://formic.co"
+    # An invented domain the article never contained is dropped (here the real linked site replaces it).
+    assert main.verified_website(ev("Formic", website="https://formic-robots.ai"), text) == "https://formic.co"
+    assert main.verified_website(ev("Formic", website="https://formic-robots.ai"), "Formic raises $50M") == ""
+
+
+def test_outbound_sites_skip_news_social_and_the_outlet_itself():
+    from parser import outbound_sites
+    html = """<html><body><article><h1>Formic raises $50M</h1>
+      <p>Chicago-based <a href="https://formic.co/">Formic</a> raised $50M led by
+      <a href="https://www.a16z.com/portfolio">a16z</a>, per <a href="https://techcrunch.com/x">TechCrunch</a>.
+      Follow on <a href="https://twitter.com/formic">X</a>. More at <a href="https://www.therobotreport.com/y">here</a>.
+      The company has grown quickly over the past year and now runs robots in dozens of factories across the US.</p>
+    </article></body></html>"""
+    assert outbound_sites(html, "https://www.therobotreport.com/formic") == ["https://formic.co", "https://a16z.com"]
+
+
+def test_company_link_falls_back_to_a_search():
+    from sheets import company_link
+    assert company_link({"Company": "Formic", "Website": "https://formic.co"}) == "https://formic.co"
+    assert company_link({"Company": "Enact Intelligence", "Category": "Robot Components & Software",
+                         "Website": ""}) == ("https://www.google.com/search?q=Enact+Intelligence+Robot+Components"
+                                             "+%26+Software+official+website")
+
+
+def test_website_falls_back_to_a_linked_site_named_after_the_company():
+    text = "Formic raises $50M\n\nLinks in the article:\nhttps://a16z.com\nhttps://formic.co"
+    assert main.verified_website(ev("Formic", website=""), text) == "https://formic.co"
+    assert main.verified_website(ev("Dream Labs", website=""), "...\n\nLinks in the article:\nhttps://dreamlabs.ai") \
+        == "https://dreamlabs.ai"
+    # No link named after the company (or no links at all): leave it empty rather than guess.
+    assert main.verified_website(ev("Kodama", website=""), text) == ""
+    assert main.verified_website(ev("Formic", website=""), "Formic raises $50M") == ""

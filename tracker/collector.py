@@ -26,6 +26,7 @@ class Article:
     published: datetime | None
     priority: int = 2  # lower is processed first (config sources[].priority)
     headline_only: bool = False  # the page can't be read; extract from title + summary
+    tracks: tuple[str, ...] = ("all", "robotics")  # database tabs this article qualified for
 
 
 def is_headline_only(article: Article) -> bool:
@@ -139,11 +140,21 @@ def collect(config: dict, now: datetime | None = None) -> tuple[list[Article], l
             failed.append(label)
             continue
         own = [re.compile(k, re.IGNORECASE) for k in src.get("keywords", [])]
-        kept = [a for a in items if is_candidate(a, own or patterns, since, focus)]
+        tracks = tuple(src.get("tracks", ["all", "robotics"]))
+        kept = []
+        for a in items:
+            # "all" takes any funding article; "robotics" also needs a focus keyword.
+            a.tracks = tuple(t for t in tracks if is_candidate(a, own or patterns, since,
+                                                              focus if t == "robotics" else None))
+            if a.tracks:
+                kept.append(a)
         log.info("%s: %d items, %d candidates", label, len(items), len(kept))
         for a in kept:
             # The same article can appear in two feeds (TechCrunch funding tag + venture category);
-            # keep the copy from the higher-priority feed.
-            if a.url not in candidates or a.priority < candidates[a.url].priority:
+            # keep the copy from the higher-priority feed, qualified for the tracks of both.
+            prev = candidates.get(a.url)
+            if prev is None or a.priority < prev.priority:
                 candidates[a.url] = a
+            if prev is not None:
+                candidates[a.url].tracks = tuple(dict.fromkeys(prev.tracks + a.tracks))
     return list(candidates.values()), failed

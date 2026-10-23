@@ -19,7 +19,8 @@ from dotenv import load_dotenv
 from collector import Article, collect, guess_company, is_headline_only
 from extractor import QuotaExhausted, make_extractor
 from normalize import (
-    EventRecord, company_key, event_key, find_match, merge_update, normalize_amount, normalize_round, parse_date,
+    EventRecord, company_key, company_website, event_key, find_match, merge_update, normalize_amount,
+    normalize_round, parse_date, site_domain,
 )
 from parser import article_text
 
@@ -52,6 +53,7 @@ def event_rows(article: Article, extraction, existing: list[EventRecord], window
             "Source": article.source,
             "Article URL": article.url,
             "Date Added": today,
+            "Website": company_website(ev.website),
         }
         key = event_key(ev.company, round_, when)
         i = find_match(key, [e.key for e in existing], window)
@@ -81,14 +83,62 @@ STALE_HEADLINE_DAYS = 3
 KNOWN_COMPANY_DAYS = 7
 
 
-def source_priority(config: dict, source: str) -> int:
+TRACKS = ("all", "robotics")
+
+
+def _sources_named(config: dict, source: str) -> list[dict]:
     if source.endswith("(via Google News)"):
         source = "Google News"
-    return min((s.get("priority", 2) for s in config["sources"] if s["name"] == source), default=2)
+    return [s for s in config["sources"] if s["name"] == source]
 
 
-def run_extraction(work: list[tuple], extractor, existing: list[EventRecord], config: dict, now: datetime):
+def source_priority(config: dict, source: str) -> int:
+    return min((s.get("priority", 2) for s in _sources_named(config, source)), default=2)
+
+
+def source_tracks(config: dict, source: str) -> tuple[str, ...]:
+    """Tracks an article from this source can feed (for retries rebuilt from the Article Log)."""
+    tracks = {t for s in _sources_named(config, source) for t in s.get("tracks", TRACKS)}
+    return tuple(t for t in TRACKS if t in tracks) or TRACKS
+
+
+def website_by_name(company: str, sites: list[str]) -> str:
+    """The linked site whose domain contains the company's name ("Formic" -> https://formic.co), if exactly one."""
+    key = company_key(company)
+    if len(key) < 3:
+        return ""
+
+    def named(site: str) -> bool:
+        label = site_domain(site).replace("-", "").split(".")[0]
+        # "formic" in "formicrobotics", or a shortened domain: "slingshot" for "Slingshot Insurance".
+        return key in label or (len(label) >= 5 and key.startswith(label))
+
+    matches = [s for s in sites if named(s)]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def linked_sites(text: str) -> list[str]:
+    _, _, links = text.partition("\n\nLinks in the article:\n")
+    return [line.strip() for line in links.splitlines() if line.strip()]
+
+
+def verified_website(ev, text: str) -> str:
+    """The extracted website, but only if its domain really appears in the article sent to the LLM.
+
+    If the LLM gave none, a linked site named after the company is used instead.
+    """
+    site = company_website(ev.website)
+    if site and site_domain(site) in text.lower():
+        return site
+    return website_by_name(ev.company, linked_sites(text))
+
+
+def run_extraction(work: list[tuple], extractor, existing: dict[str, list[EventRecord]], config: dict,
+                   now: datetime):
     """Extract events from (log_row, article, attempts) items, highest-priority sources first.
+
+    One LLM call per article feeds both tracks: every round goes to existing["all"] when the article's
+    source feeds that track, and in-focus rounds go to existing["robotics"].
 
     LLM calls are saved by skipping, without a call: headline-only items that are stale or about a company
     added in the last few days, and any article about a company another article already covered this run.
@@ -100,13 +150,14 @@ def run_extraction(work: list[tuple], extractor, existing: list[EventRecord], co
     max_attempts = config["max_attempts_per_article"]
     budget = config.get("max_llm_calls_per_run", 10**9)
     statuses = []
-    counts = dict.fromkeys(["llm_calls", "funding", "added", "updated", "duplicates", "not_funding", "not_in_focus",
-                            "same_story", "known_company", "stale", "errors", "failed", "left_pending"], 0)
+    counts = dict.fromkeys(["llm_calls", "funding", "all_added", "all_updated", "robotics_added", "robotics_updated",
+                            "duplicates", "not_funding", "not_in_focus", "same_story", "known_company", "stale",
+                            "errors", "failed", "left_pending"], 0)
     covered: set[str] = set()  # company keys extracted this run
     quota_error = None
 
     def recently_added(company: str) -> bool:
-        for e in existing:
+        for e in existing["robotics"]:
             d = parse_date(e.values.get("Date"))
             if e.key.company == company and d and (today - d).days <= KNOWN_COMPANY_DAYS:
                 return True
@@ -135,7 +186,8 @@ def run_extraction(work: list[tuple], extractor, existing: list[EventRecord], co
 
         counts["llm_calls"] += 1
         try:
-            extraction = extractor.extract(article, article_text(article, config))
+            text = article_text(article, config)
+            extraction = extractor.extract(article, text)
         except QuotaExhausted as e:
             # Not the article's fault: leave it and the rest "pending" (attempts unchanged) for the next run.
             quota_error = e
@@ -157,24 +209,31 @@ def run_extraction(work: list[tuple], extractor, existing: list[EventRecord], co
         covered.update(company_key(ev.company) for ev in extraction.events)
         if guess:
             covered.add(guess)
-        in_focus = [ev for ev in extraction.events if ev.in_focus]
-        if not in_focus:
+        events = [ev.model_copy(update={"website": verified_website(ev, text)}) for ev in extraction.events]
+        routed = {
+            "all": events if "all" in article.tracks else [],
+            "robotics": [ev for ev in events if ev.in_focus],
+        }
+        if not routed["all"] and not routed["robotics"]:
             counts["not_in_focus"] += 1
             statuses.append((row, "skipped_not_in_focus", attempts + 1, ""))
             continue
 
-        added, updated, skipped = event_rows(
-            article, extraction.model_copy(update={"events": in_focus}), existing, window, today.isoformat())
         counts["funding"] += 1
-        counts["added"] += len(added)
-        counts["updated"] += len(updated)
-        counts["duplicates"] += skipped
         statuses.append((row, "extracted", attempts + 1, ""))
-        for mark, recs in (("+", added), ("~", updated)):
-            for r in recs:
-                v = r.values
-                log.info("%s %s | %s | %s | %s | %s | %s | %s", mark, v["Date"], v["Company"], v["Funding Round"],
-                         v["Amount Raised"], v["Valuation"], v["Category"], v["Source"])
+        for track, evs in routed.items():
+            if not evs:
+                continue
+            added, updated, skipped = event_rows(
+                article, extraction.model_copy(update={"events": evs}), existing[track], window, today.isoformat())
+            counts[f"{track}_added"] += len(added)
+            counts[f"{track}_updated"] += len(updated)
+            counts["duplicates"] += skipped
+            for mark, recs in (("+", added), ("~", updated)):
+                for r in recs:
+                    v = r.values
+                    log.info("%s [%s] %s | %s | %s | %s | %s | %s | %s", mark, track, v["Date"], v["Company"],
+                             v["Funding Round"], v["Amount Raised"], v["Category"], v["Source"], v["Website"] or "-")
     return statuses, counts, quota_error
 
 
@@ -205,7 +264,7 @@ def main() -> int:
     max_attempts = config["max_attempts_per_article"]
 
     if args.no_write:
-        store, existing = None, []
+        store, existing = None, {t: [] for t in TRACKS}
         work = {a.url: (None, a, 0) for a in candidates}
     else:
         from sheets import SheetStore, open_spreadsheet
@@ -215,20 +274,23 @@ def main() -> int:
         fresh = store.log_new_articles(new, now.isoformat(timespec="seconds"))
         retry = {u: e for u, e in logged.items() if e.status in ("pending", "error") and e.attempts < max_attempts}
         for e in retry.values():
-            # Rebuilt from the Article Log, so it lacks its feed's priority.
+            # Rebuilt from the Article Log, so it lacks its feed's priority and tracks.
             e.article.priority = source_priority(config, e.article.source)
+            e.article.tracks = source_tracks(config, e.article.source)
         work = {u: (e.row, e.article, e.attempts) for u, e in {**retry, **fresh}.items()}
-        existing = store.existing_records()
-        log.info("New articles: %d, retries: %d, events already in sheet: %d", len(fresh), len(retry), len(existing))
+        existing = {t: store.existing_records(t) for t in TRACKS}
+        log.info("New articles: %d, retries: %d, rows already in sheet: %s", len(fresh), len(retry),
+                 {t: len(v) for t, v in existing.items()})
 
     statuses, counts, quota_error = run_extraction(list(work.values()), extractor, existing, config, now)
 
     if store:
         # Rows first: if this fails, statuses stay "pending" and the next run retries (dedup prevents doubles).
         # New and updated rounds are appended before the rows they replace are deleted, so nothing is lost.
-        pending = [e for e in existing if e.row is None]
-        store.append_events([e.values for e in pending])
-        store.delete_rows([r for e in pending for r in e.replaces])
+        for track, records in existing.items():
+            pending = [e for e in records if e.row is None]
+            store.append_events(track, [e.values for e in pending])
+            store.delete_rows(track, [r for e in pending for r in e.replaces])
         store.update_statuses(statuses)
 
     log.info("Done. articles=%d %s", len(work), " ".join(f"{k}={v}" for k, v in counts.items()))

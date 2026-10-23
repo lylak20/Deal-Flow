@@ -42,7 +42,7 @@ def test_parse_feed_and_filter():
 
 def _event(**kw):
     base = dict(company="Eka Robotics", round="Series A", amount="$150 million", valuation="", date="2026-10-20",
-                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", in_focus=True)
+                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", website="", in_focus=True)
     return FundingEvent(**{**base, **kw})
 
 
@@ -69,6 +69,7 @@ def test_event_rows_normalizes_and_dedups():
         "Date": "2026-10-20", "Company": "Eka Robotics", "Funding Round": "Series A", "Amount Raised": "$150M",
         "Valuation": "$1.45B", "Lead Investor": "a16z", "Other Investors": "F-Prime", "Category": "Robotics",
         "Source": "TechCrunch", "Article URL": "https://techcrunch.com/eka", "Date Added": "2026-10-22",
+        "Website": "",
     }
     nova = added[1].values
     assert [nova[h] for h in ("Date", "Company", "Funding Round", "Amount Raised")] == \

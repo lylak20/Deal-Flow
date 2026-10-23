@@ -8,9 +8,18 @@ collector.py  → parser.py   → extractor.py → sheets.py
 (RSS + 키워드)   (기사 본문)    (Claude JSON)   (중복 제거 후 append)
 ```
 
-## 로보틱스 한정과 뉴스 소스 (2026-10-23부터)
+## 두 개의 데이터베이스 탭과 뉴스 소스 (2026-10-23부터)
 
-**로보틱스로 보는 것:** 로봇·휴머노이드·Physical AI(로봇 파운데이션 모델 포함), 드론·배송 로봇, 자율주행, 제조·물류 자동화, 로봇 부품·소프트웨어. **국방·무기 시스템은 제외**해요. 이전에 기록된 다른 분야 행은 그대로 남아 있어요.
+한 번 실행하면 같은 열 구조의 탭 두 개가 함께 채워져요. 기사 하나당 LLM 호출은 한 번이고, 결과를 두 탭에 나눠 써요.
+
+| 탭 | 무엇이 들어가나 | 소스 |
+|---|---|---|
+| **Raw Database** | 모든 분야의 펀딩 라운드 | TechCrunch, PR Newswire, Crunchbase News |
+| **Robotics Database** | 로보틱스 라운드만 | 위 3개 + TechCrunch Robotics, The Robot Report, Robotics & Automation News, Google News |
+
+TechCrunch 기사에 로보틱스 회사가 나오면 두 탭 모두에 들어가요. 각 탭에는 대시보드가 따로 있어요(**Funding Dashboard**, **Robotics Dashboard**). 소스마다 어느 탭에 들어갈지는 `config.yaml`의 `tracks`로 정해요.
+
+**로보틱스로 보는 것:** 로봇·휴머노이드·Physical AI(로봇 파운데이션 모델 포함), 드론·배송 로봇, 자율주행, 제조·물류 자동화, 로봇 부품·소프트웨어. **국방·무기 시스템은 제외**해요.
 
 | 우선순위 | 소스 | 비고 |
 |---|---|---|
@@ -79,9 +88,9 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 
 | 탭 | 내용 |
 |---|---|
-| **Raw Database** | 펀딩 라운드 1건이 1행이에요. 새 라운드는 맨 아래에 추가해요. 같은 라운드의 더 자세한 소식이 나오면 기존 행을 지우고 최신 내용으로 다시 써요(아래 중복 규칙 참고). **Valuation**(밸류에이션)은 기사에 나와 있을 때만 채워요. B열 **✉️ Email**을 누르면 그 회사에 맞게 채워진 Gmail 초안이 열려요. 받는 사람은 비어 있어요. |
+| **Raw Database** / **Robotics Database** | 펀딩 라운드 1건이 1행이에요(두 탭 모두 같은 열). **Company**(C열)를 누르면 회사 웹사이트로 가요. 웹사이트는 기사 본문과 기사 안의 링크에서만 찾고, 찾은 주소는 **Website** 열(맨 끝)에 적어요. 웹사이트를 찾지 못하면 `회사명 + 분야 + official website` Google 검색 결과로 연결돼요. 새 라운드는 맨 아래에 추가해요. 같은 라운드의 더 자세한 소식이 나오면 기존 행을 지우고 최신 내용으로 다시 써요(아래 중복 규칙 참고). **Valuation**(밸류에이션)은 기사에 나와 있을 때만 채워요. B열 **✉️ Email**을 누르면 그 회사에 맞게 채워진 Gmail 초안이 열려요. 받는 사람은 비어 있어요. |
 | **Email Template** | Email 버튼이 쓰는 제목(B1)과 본문(B2)이에요. 여기만 고치면 모든 버튼에 반영돼요. 쓸 수 있는 자리표시자는 `{Company}` `{Round}` `{Amount}` `{Lead}`예요. 처음에는 본문 끝의 `[Your name]`을 바꿔 주세요. |
-| **Funding Dashboard** | 라운드별 열에 `회사명 (날짜)`가 최신순으로 나와요. 수식으로 자동 생성돼서 프로그램이 건드리지 않아요. |
+| **Funding Dashboard** / **Robotics Dashboard** | 각 데이터베이스 탭의 라운드별 열에 `회사명 (날짜)`가 최신순으로 나와요. 수식으로 자동 생성돼서 프로그램이 건드리지 않아요. |
 | **Article Log** | 처리한 기사 기록이에요. Status는 `pending` → `extracted` / `skipped_not_funding` / `error` 순서로 바뀌고, 3번 실패하면 `failed`가 돼요. |
 
 - **중복 규칙:** 같은 회사(이름 표기 차이는 무시)의 같은 라운드가 **1년(365일)** 안에 이미 있으면 같은 라운드로 봐요. 한쪽 라운드가 `Undisclosed`인 경우도 같은 라운드로 봐요.
