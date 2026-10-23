@@ -2,16 +2,24 @@ name: News Tracker
 
 on:
   schedule:
-    # Once a day at 07:00 Pacific. GitHub cron is UTC-only, so both candidate times are scheduled
-    # and the "when" step keeps the one that is 07:00 in Los Angeles today:
-    #   14:00 UTC = 07:00 PDT (summer),  15:00 UTC = 07:00 PST (winter).
+    # Target: once a day at 07:00 Pacific. GitHub cron is UTC-only and best-effort (scheduled runs can
+    # start late or be dropped when GitHub is busy), so several triggers are scheduled and the "when"
+    # step lets only the first one at or after 07:00 Los Angeles time do the work each day:
+    #   14:00 UTC = 07:00 PDT / 06:00 PST,  15:00 UTC = 08:00 PDT / 07:00 PST,
+    #   15:30 and 16:30 UTC = backups if the earlier trigger never ran or failed.
     - cron: "0 14 * * *"
     - cron: "0 15 * * *"
+    - cron: "30 15 * * *"
+    - cron: "30 16 * * *"
   workflow_dispatch: {}
 
 concurrency:
   group: news-tracker
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   run:
@@ -22,17 +30,33 @@ jobs:
         working-directory: tracker
     steps:
       - id: when
-        name: Check it is 07:00 Pacific
+        name: Check it is the first run after 07:00 Pacific today
         working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "Manual run"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          zone=$(TZ=America/Los_Angeles date +%Z)
-          if [ "$zone" = "PDT" ]; then want="0 14 * * *"; else want="0 15 * * *"; fi
-          if [ "${{ github.event.schedule }}" = "$want" ]; then run=true; else run=false; fi
-          echo "Los Angeles is on $zone; trigger '${{ github.event.schedule }}' -> run=$run"
-          echo "run=$run" >> "$GITHUB_OUTPUT"
+          hour=$(TZ=America/Los_Angeles date +%-H)
+          if [ "$hour" -lt 7 ]; then
+            echo "It is $(TZ=America/Los_Angeles date +%H:%M\ %Z) in Los Angeles, before 07:00: skip"
+            echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # Did an earlier scheduled run today (Pacific date) already complete the tracker step?
+          since=$(date -u -d @"$(TZ=America/Los_Angeles date -d 'today 00:00' +%s)" +%Y-%m-%dT%H:%M:%SZ)
+          ids=$(gh api "repos/${{ github.repository }}/actions/workflows/news-tracker.yml/runs?event=schedule&created=>=$since&per_page=50" \
+                --jq '.workflow_runs[] | select(.id != ${{ github.run_id }}) | .id')
+          for id in $ids; do
+            done_step=$(gh api "repos/${{ github.repository }}/actions/runs/$id/jobs" \
+                        --jq '[.jobs[].steps[] | select(.name == "Run tracker" and .conclusion == "success")] | length')
+            if [ "${done_step:-0}" -gt 0 ]; then
+              echo "Run $id already refreshed the sheet today: skip"
+              echo "run=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          echo "First run after 07:00 Pacific today ($(TZ=America/Los_Angeles date +%H:%M\ %Z)): run"
+          echo "run=true" >> "$GITHUB_OUTPUT"
       - if: steps.when.outputs.run == 'true'
         uses: actions/checkout@v4
       - if: steps.when.outputs.run == 'true'
@@ -44,6 +68,7 @@ jobs:
       - if: steps.when.outputs.run == 'true'
         run: pip install -r requirements.txt
       - if: steps.when.outputs.run == 'true'
+        name: Run tracker
         run: python main.py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
