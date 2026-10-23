@@ -8,7 +8,7 @@ export default async function handler(req, res) {
     'https://venturebeat.com/press-releases/feed/',
   ];
 
-  const SEVEN_DAYS_AGO = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const SEVEN_DAYS_AGO = Date.now() - 180 * 24 * 60 * 60 * 1000;
 
   const STAGE_PATTERNS = [
     { stage: 'Series B', pattern: /series[\s-]?b/i },
