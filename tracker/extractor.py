@@ -82,8 +82,11 @@ class ClaudeExtractor:
                 output_config={"effort": self._effort},
             )
         except self._anthropic.BadRequestError as e:
-            if "credit balance" in str(e).lower():
+            message = str(e).lower()
+            if "credit balance" in message:
                 raise QuotaExhausted("Anthropic credit balance is too low; top up at platform.claude.com") from e
+            if "usage limit" in message:
+                raise QuotaExhausted(f"Anthropic spend limit reached; raise it in the Console Limits page ({e})") from e
             raise
         if resp.stop_reason == "refusal":
             raise RuntimeError(f"Claude declined this article ({getattr(resp.stop_details, 'category', None)})")
