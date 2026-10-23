@@ -42,7 +42,7 @@ def test_parse_feed_and_filter():
 
 def _event(**kw):
     base = dict(company="Eka Robotics", round="Series A", amount="$150 million", valuation="", date="2026-10-20",
-                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics")
+                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", in_focus=True)
     return FundingEvent(**{**base, **kw})
 
 

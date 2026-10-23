@@ -1,12 +1,28 @@
 # News Tracker
 
-TechCrunch, PR Newswire, Crunchbase News에서 스타트업 펀딩 뉴스를 매일 오전 7시(미국 태평양 시간)에 수집하는 프로그램이에요. Claude Haiku 5.5로 펀딩 정보만 뽑아서 Google Sheet **"VC Fundraising Tracker"** 에 계속 추가해요.
+**로보틱스** 스타트업 펀딩 뉴스를 매일 오전 7시(미국 태평양 시간)에 수집하는 프로그램이에요. TechCrunch, PR Newswire를 먼저 보고, 그다음 로보틱스 전문 매체와 Google News를 봐요. Claude Haiku 5.5(한도가 차면 Gemini)로 펀딩 정보를 뽑아 Google Sheet **"VC Fundraising Tracker"** 에 추가해요.
 설계 문서: [../docs/news-tracker-design.md](../docs/news-tracker-design.md)
 
 ```
 collector.py  → parser.py   → extractor.py → sheets.py
 (RSS + 키워드)   (기사 본문)    (Claude JSON)   (중복 제거 후 append)
 ```
+
+## 로보틱스 한정과 뉴스 소스 (2026-10-23부터)
+
+**로보틱스로 보는 것:** 로봇·휴머노이드·Physical AI(로봇 파운데이션 모델 포함), 드론·배송 로봇, 자율주행, 제조·물류 자동화, 로봇 부품·소프트웨어. **국방·무기 시스템은 제외**해요. 이전에 기록된 다른 분야 행은 그대로 남아 있어요.
+
+| 우선순위 | 소스 | 비고 |
+|---|---|---|
+| 1 | TechCrunch(펀딩·벤처), PR Newswire(VC) | 항상 먼저 처리 |
+| 2 | TechCrunch Robotics, The Robot Report, Robotics & Automation News, Crunchbase News | 로보틱스 전문·주요 매체 |
+| 3 | Google News 검색 (로보틱스 + 펀딩, 미국, 최근 1일) | 여러 매체를 한 번에 잡는 "그물망". 링크로 본문을 열 수 없어 **제목만으로** 추출해요. Source 열에는 `매체명 (via Google News)`로 나와요 |
+
+**LLM 호출을 아끼는 규칙**
+- 제목과 요약에 로보틱스 단어가 없는 기사는 LLM에 보내지 않아요(`focus.keywords`). 최종 판단은 LLM이 해요. 로보틱스가 아닌 라운드는 Article Log에 `skipped_not_in_focus`로 남아요.
+- 같은 회사를 다룬 기사가 여러 개면 우선순위가 높은 기사 1건만 LLM에 보내요. 나머지는 `skipped_same_story`로 처리해요.
+- Google News 제목이 최근 7일 안에 이미 기록된 회사에 관한 것이면 `skipped_known_company`, 3일이 지난 것이면 `skipped_stale`로 건너뛰어요.
+- 한 번 실행할 때 LLM 호출은 최대 `max_llm_calls_per_run`(30)번이에요. 이 상한에 걸리거나 Claude·Gemini 한도가 모두 차면 남은 기사는 `pending`으로 다음 실행에 넘겨요. 다음 실행에서도 TechCrunch·PR Newswire 새 기사를 먼저 처리해요.
 
 ## 처음 한 번만 하는 설정
 

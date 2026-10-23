@@ -5,7 +5,7 @@ import logging
 import requests
 import trafilatura
 
-from collector import Article
+from collector import Article, is_headline_only
 
 log = logging.getLogger(__name__)
 
@@ -13,6 +13,8 @@ log = logging.getLogger(__name__)
 def article_text(article: Article, config: dict) -> str:
     """Main text of the article, falling back to the RSS title and summary if the page can't be read."""
     fallback = f"{article.title}\n\n{article.summary}".strip()
+    if is_headline_only(article):
+        return fallback[: config["max_article_chars"]]
     try:
         resp = requests.get(
             article.url,

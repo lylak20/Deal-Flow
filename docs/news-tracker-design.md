@@ -239,5 +239,13 @@ Deal Flow/
 - **Claude → Gemini 자동 대체 (2026-10-23):** Anthropic 월 사용 한도(spend limit)가 다 차서 Claude 호출이 2026-11-01까지 막혔다. 그래서 `llm.fallbacks: [gemini]`를 추가했다. Claude 호출이 `QuotaExhausted`(크레딧 부족, 사용 한도 도달)를 내면, 그 실행의 나머지 기사는 Gemini 무료 등급으로 처리한다. 기사마다 Claude를 다시 시도하지 않는다. 다음 실행은 다시 Claude부터 시도하므로, 한도를 올리면 자동으로 Claude로 돌아간다. 대체 모델 키가 없으면 경고만 남기고 건너뛴다. 실제 실행에서 대기 중이던 Higgsfield 기사를 Gemini가 처리해 11번째 행으로 추가한 것을 확인했다.
 - **같은 라운드의 후속 보도는 행을 교체 (2026-10-23):** 프롬프트의 "append only" 규칙을 사용자 요청으로 한 군데 바꿨다. 새 이벤트가 기존 행과 같은 라운드(같은 회사, 같은 라운드 또는 한쪽이 `Undisclosed`, 365일 이내)이면서 기존 행에 없던 정보(라운드 이름, 금액, 밸류에이션, 리드·참여 투자자)를 담고 있으면 둘을 합친다. 합칠 때는 새 값이 우선이고, 새 소식에 없는 값은 기존 행에서 가져온다. 합친 행을 맨 아래에 추가한 **뒤** 기존 행을 삭제하므로 중간에 실패해도 데이터는 남는다. 새 정보가 없으면 건너뛴다. 다른 라운드는 그대로 새 행이다. Raw Database는 이제 헤더 이름으로 읽는다(`existing_records`). 첫 사례로 Warhound의 `Undisclosed`(10/22)와 `Seed`(10/23) 두 행을 하나로 합쳤다.
 - **Valuation 열 추가 (2026-10-23):** Amount Raised 오른쪽(F열)에 추가했다. 추출 스키마에 `valuation` 필드를 넣었고(기사에 나온 경우만, post-money 우선), 금액과 같은 형식으로 정규화한다. 기존 시트는 `setup_sheet.py`가 빠진 열을 제자리에 넣는다. 열을 추가하기 전에 기록된 행의 밸류에이션은 비어 있다.
+- **로보틱스 한정 + 소스 확장 (2026-10-23):** 일반 소스를 늘리면 범위가 너무 넓어져서, 앞으로는 로보틱스 라운드만 기록한다.
+  - **범위:** 로봇·휴머노이드·Physical AI, 드론·배송, 자율주행, 제조 자동화·로봇 부품. 국방은 제외한다. 기존 행은 유지한다.
+  - **새 소스:** TechCrunch Robotics, The Robot Report, Robotics & Automation News, 그리고 Google News 검색 RSS(헤드라인 전용).
+  - **실제로 확인했지만 쓰지 않은 소스:** IEEE Spectrum, Robotics 24/7은 펀딩 뉴스가 없다. FinSMEs, GlobeNewswire, Fierce Biotech는 봇 차단(403)이다. 일반 US 매체(The SaaS News, GeekWire 등)는 로보틱스 전문이 아니다.
+  - **필터:** LLM 앞에서 `focus.keywords`로 1차로 거르고, LLM이 이벤트별 `in_focus`와 로보틱스 하위 카테고리를 정한다.
+  - **LLM 예산:** Claude는 11-01까지 한도가 막혀 있고 Gemini 무료 등급은 모델당 하루 약 20회라서 예산을 둔다. 처리 순서는 소스 `priority`(TechCrunch·PR Newswire 1)이고, 실행당 최대 `max_llm_calls_per_run` 회만 호출한다. 같은 회사를 다룬 기사는 한 번만 호출하고(`guess_company`), Google News 헤드라인은 최근 기록된 회사이거나 오래된 것이면 건너뛴다.
+  - **Google News 소스 키워드:** 헤드라인의 "raises"가 펀딩이 아닌 경우가 많아서(raises doubts/toll/advisory), 소스별 `keywords`로 금액이나 펀딩 단어를 요구한다.
+  - **2026-10-23 드라이런:** 8개 소스, 후보 22건, 같은 소식 건너뛰기 후 예상 LLM 호출은 약 15회다.
 - **3-Month Alerts 탭은 아직 만들지 않았다.** 2단계에서 추가한다.
 - **job 실패 기준:** 피드 하나만 실패하면 경고만 남긴다. job을 실패로 표시하는 경우는 모든 피드를 읽지 못했거나, 기사가 3번 재시도 후에도 실패(`failed`)했을 때뿐이다. 일시적인 오류는 다음 실행에서 자동으로 재시도한다.

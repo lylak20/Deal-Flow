@@ -35,7 +35,22 @@ Field rules:
 - other_investors: other participating investors.
 - category: one short sector label, e.g. "AI Infrastructure", "Robotics", "Fintech", "Healthcare",
   "Biotech", "Defense", "Climate", "Developer Tools", "Security", "Consumer", "Enterprise Software".
+- in_focus: true for every event when no focus sector is given.
 Never guess: leave a field empty rather than invent it.
+"""
+
+
+def system_instruction(focus: dict | None) -> str:
+    """The base instruction plus, when config has a focus sector, how to judge in_focus and category."""
+    if not focus:
+        return SYSTEM_INSTRUCTION
+    categories = ", ".join(f'"{c}"' for c in focus.get("categories", []))
+    return SYSTEM_INSTRUCTION + f"""
+Focus sector: {focus["name"]}. {focus["description"]}
+Still report every funding event in the article, but set in_focus to true only when the company fits
+the focus sector, judged by what the company builds, not by the headline's wording. For in-focus
+events, category must be one of: {categories}. Some articles give only a headline: extract what it
+states and leave the rest empty.
 """
 
 
@@ -48,6 +63,7 @@ class FundingEvent(BaseModel):
     lead_investor: str
     other_investors: list[str]
     category: str
+    in_focus: bool
 
 
 class Extraction(BaseModel):
@@ -65,8 +81,10 @@ def _prompt(article: Article, text: str) -> str:
 
 
 class ClaudeExtractor:
-    def __init__(self, api_key: str, settings: dict):
+    def __init__(self, api_key: str, settings: dict, system: str = SYSTEM_INSTRUCTION):
         import anthropic
+
+        self._system = system
 
         self._anthropic = anthropic
         # The SDK itself retries 429/5xx/connection errors with backoff.
@@ -79,7 +97,7 @@ class ClaudeExtractor:
             resp = self._client.messages.parse(
                 model=self._model,
                 max_tokens=4096,
-                system=SYSTEM_INSTRUCTION,
+                system=self._system,
                 messages=[{"role": "user", "content": _prompt(article, text)}],
                 output_format=Extraction,
                 output_config={"effort": self._effort},
@@ -105,9 +123,11 @@ def _retry_delay_seconds(error: Exception) -> float | None:
 
 
 class GeminiExtractor:
-    def __init__(self, api_key: str, settings: dict):
+    def __init__(self, api_key: str, settings: dict, system: str = SYSTEM_INSTRUCTION):
         from google import genai
         from google.genai import types
+
+        self._system = system
 
         self._types = types
         self._client = genai.Client(api_key=api_key)
@@ -139,7 +159,7 @@ class GeminiExtractor:
 
     def _extract_with(self, model: str, article: Article, text: str) -> Extraction:
         config = self._types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=self._system,
             response_mime_type="application/json",
             response_schema=Extraction,
             temperature=0,
@@ -192,6 +212,7 @@ class FallbackExtractor:
 def make_extractor(config: dict, env: dict) -> FallbackExtractor:
     llm = config["llm"]
     primary = llm["provider"]
+    system = system_instruction(config.get("focus"))
     chain = []
     for name in [primary, *llm.get("fallbacks", [])]:
         cls, key_var = PROVIDERS[name]
@@ -200,5 +221,5 @@ def make_extractor(config: dict, env: dict) -> FallbackExtractor:
                 raise SystemExit(f"{key_var} is not set (needed for llm.provider: {name})")
             log.warning("%s is not set, so the %s fallback is unavailable", key_var, name)
             continue
-        chain.append((name, cls(env[key_var], llm[name])))
+        chain.append((name, cls(env[key_var], llm[name], system)))
     return FallbackExtractor(chain)

@@ -16,10 +16,10 @@ import urllib3.util.connection
 import yaml
 from dotenv import load_dotenv
 
-from collector import Article, collect
+from collector import Article, collect, guess_company, is_headline_only
 from extractor import QuotaExhausted, make_extractor
 from normalize import (
-    EventRecord, event_key, find_match, merge_update, normalize_amount, normalize_round, parse_date,
+    EventRecord, company_key, event_key, find_match, merge_update, normalize_amount, normalize_round, parse_date,
 )
 from parser import article_text
 
@@ -77,57 +77,69 @@ def event_rows(article: Article, extraction, existing: list[EventRecord], window
     return added, updated, skipped
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--dry-run", action="store_true", help="list candidate articles only")
-    ap.add_argument("--no-write", action="store_true", help="extract but do not write to the sheet")
-    args = ap.parse_args()
+STALE_HEADLINE_DAYS = 3
+KNOWN_COMPANY_DAYS = 7
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    load_dotenv(HERE / ".env")
-    config = yaml.safe_load((HERE / "config.yaml").read_text(encoding="utf-8"))
-    if config["http"].get("ipv4_only"):
-        urllib3.util.connection.HAS_IPV6 = False
-    now = datetime.now(timezone.utc)
-    today = now.date().isoformat()
 
-    candidates, failed_sources = collect(config, now)
-    enabled = [s for s in config["sources"] if s.get("enabled", True)]
-    log.info("Candidates: %d (failed sources: %d/%d)", len(candidates), len(failed_sources), len(enabled))
+def source_priority(config: dict, source: str) -> int:
+    if source.endswith("(via Google News)"):
+        source = "Google News"
+    return min((s.get("priority", 2) for s in config["sources"] if s["name"] == source), default=2)
 
-    if args.dry_run:
-        for a in sorted(candidates, key=lambda a: a.published or now, reverse=True):
-            print(f"{a.published:%Y-%m-%d %H:%M}  [{a.source}]  {a.title}\n    {a.url}" if a.published
-                  else f"(no date)  [{a.source}]  {a.title}\n    {a.url}")
-        return 1 if len(failed_sources) == len(enabled) else 0
 
-    extractor = make_extractor(config, os.environ)
-    max_attempts = config["max_attempts_per_article"]
+def run_extraction(work: list[tuple], extractor, existing: list[EventRecord], config: dict, now: datetime):
+    """Extract events from (log_row, article, attempts) items, highest-priority sources first.
+
+    LLM calls are saved by skipping, without a call: headline-only items that are stale or about a company
+    added in the last few days, and any article about a company another article already covered this run.
+    Stops at max_llm_calls_per_run or when every provider is out of quota; what's left stays "pending".
+    Returns (Article Log status updates, counts, the QuotaExhausted error if the run was cut short).
+    """
+    today = now.date()
     window = config["dedup_window_days"]
-
-    if args.no_write:
-        store, existing = None, []
-        work = {a.url: (None, a, 0) for a in candidates}
-    else:
-        from sheets import SheetStore, open_spreadsheet
-        store = SheetStore(open_spreadsheet())
-        logged = store.article_log()
-        new = [a for a in candidates if a.url not in logged]
-        fresh = store.log_new_articles(new, now.isoformat(timespec="seconds"))
-        retry = {u: e for u, e in logged.items() if e.status in ("pending", "error") and e.attempts < max_attempts}
-        work = {u: (e.row, e.article, e.attempts) for u, e in {**retry, **fresh}.items()}
-        existing = store.existing_records()
-        log.info("New articles: %d, retries: %d, events already in sheet: %d", len(fresh), len(retry), len(existing))
-
+    max_attempts = config["max_attempts_per_article"]
+    budget = config.get("max_llm_calls_per_run", 10**9)
     statuses = []
-    counts = {"funding": 0, "not_funding": 0, "added": 0, "updated": 0, "duplicates": 0, "errors": 0, "failed": 0}
+    counts = dict.fromkeys(["llm_calls", "funding", "added", "updated", "duplicates", "not_funding", "not_in_focus",
+                            "same_story", "known_company", "stale", "errors", "failed", "left_pending"], 0)
+    covered: set[str] = set()  # company keys extracted this run
     quota_error = None
-    for row, article, attempts in work.values():
+
+    def recently_added(company: str) -> bool:
+        for e in existing:
+            d = parse_date(e.values.get("Date"))
+            if e.key.company == company and d and (today - d).days <= KNOWN_COMPANY_DAYS:
+                return True
+        return False
+
+    order = sorted(work, key=lambda w: (w[1].priority, -(w[1].published.timestamp() if w[1].published else 0)))
+    for n, (row, article, attempts) in enumerate(order):
+        guess = guess_company(article.title)
+        headline = is_headline_only(article)
+        if headline and article.published and (now - article.published).days > STALE_HEADLINE_DAYS:
+            counts["stale"] += 1
+            statuses.append((row, "skipped_stale", attempts, ""))
+            continue
+        if guess and guess in covered:
+            counts["same_story"] += 1
+            statuses.append((row, "skipped_same_story", attempts, ""))
+            continue
+        if headline and guess and recently_added(guess):
+            counts["known_company"] += 1
+            statuses.append((row, "skipped_known_company", attempts, ""))
+            continue
+        if counts["llm_calls"] >= budget:
+            counts["left_pending"] = len(order) - n
+            log.warning("Reached max_llm_calls_per_run (%d); %d articles stay pending", budget, len(order) - n)
+            break
+
+        counts["llm_calls"] += 1
         try:
             extraction = extractor.extract(article, article_text(article, config))
         except QuotaExhausted as e:
             # Not the article's fault: leave it and the rest "pending" (attempts unchanged) for the next run.
             quota_error = e
+            counts["left_pending"] = len(order) - n
             log.error("%s. Stopping; unprocessed articles stay pending.", e)
             break
         except Exception as e:
@@ -142,8 +154,17 @@ def main() -> int:
             counts["not_funding"] += 1
             statuses.append((row, "skipped_not_funding", attempts + 1, ""))
             continue
+        covered.update(company_key(ev.company) for ev in extraction.events)
+        if guess:
+            covered.add(guess)
+        in_focus = [ev for ev in extraction.events if ev.in_focus]
+        if not in_focus:
+            counts["not_in_focus"] += 1
+            statuses.append((row, "skipped_not_in_focus", attempts + 1, ""))
+            continue
 
-        added, updated, skipped = event_rows(article, extraction, existing, window, today)
+        added, updated, skipped = event_rows(
+            article, extraction.model_copy(update={"events": in_focus}), existing, window, today.isoformat())
         counts["funding"] += 1
         counts["added"] += len(added)
         counts["updated"] += len(updated)
@@ -152,8 +173,55 @@ def main() -> int:
         for mark, recs in (("+", added), ("~", updated)):
             for r in recs:
                 v = r.values
-                log.info("%s %s | %s | %s | %s | %s | %s", mark, v["Date"], v["Company"], v["Funding Round"],
-                         v["Amount Raised"], v["Valuation"], v["Lead Investor"])
+                log.info("%s %s | %s | %s | %s | %s | %s | %s", mark, v["Date"], v["Company"], v["Funding Round"],
+                         v["Amount Raised"], v["Valuation"], v["Category"], v["Source"])
+    return statuses, counts, quota_error
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true", help="list candidate articles only")
+    ap.add_argument("--no-write", action="store_true", help="extract but do not write to the sheet")
+    args = ap.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    load_dotenv(HERE / ".env")
+    config = yaml.safe_load((HERE / "config.yaml").read_text(encoding="utf-8"))
+    if config["http"].get("ipv4_only"):
+        urllib3.util.connection.HAS_IPV6 = False
+    now = datetime.now(timezone.utc)
+
+    candidates, failed_sources = collect(config, now)
+    enabled = [s for s in config["sources"] if s.get("enabled", True)]
+    log.info("Candidates: %d (failed sources: %d/%d)", len(candidates), len(failed_sources), len(enabled))
+
+    if args.dry_run:
+        for a in sorted(candidates, key=lambda a: (a.priority, -(a.published or now).timestamp())):
+            when = f"{a.published:%Y-%m-%d %H:%M}" if a.published else "(no date)"
+            print(f"P{a.priority} {when}  [{a.source}]  {a.title}\n    company={guess_company(a.title)}  {a.url[:100]}")
+        return 1 if len(failed_sources) == len(enabled) else 0
+
+    extractor = make_extractor(config, os.environ)
+    max_attempts = config["max_attempts_per_article"]
+
+    if args.no_write:
+        store, existing = None, []
+        work = {a.url: (None, a, 0) for a in candidates}
+    else:
+        from sheets import SheetStore, open_spreadsheet
+        store = SheetStore(open_spreadsheet())
+        logged = store.article_log()
+        new = [a for a in candidates if a.url not in logged]
+        fresh = store.log_new_articles(new, now.isoformat(timespec="seconds"))
+        retry = {u: e for u, e in logged.items() if e.status in ("pending", "error") and e.attempts < max_attempts}
+        for e in retry.values():
+            # Rebuilt from the Article Log, so it lacks its feed's priority.
+            e.article.priority = source_priority(config, e.article.source)
+        work = {u: (e.row, e.article, e.attempts) for u, e in {**retry, **fresh}.items()}
+        existing = store.existing_records()
+        log.info("New articles: %d, retries: %d, events already in sheet: %d", len(fresh), len(retry), len(existing))
+
+    statuses, counts, quota_error = run_extraction(list(work.values()), extractor, existing, config, now)
 
     if store:
         # Rows first: if this fails, statuses stay "pending" and the next run retries (dedup prevents doubles).
@@ -163,11 +231,7 @@ def main() -> int:
         store.delete_rows([r for e in pending for r in e.replaces])
         store.update_statuses(statuses)
 
-    log.info(
-        "Done. processed=%d funding_articles=%d added=%d updated=%d duplicates=%d not_funding=%d errors=%d failed=%d",
-        len(work), counts["funding"], counts["added"], counts["updated"], counts["duplicates"],
-        counts["not_funding"], counts["errors"], counts["failed"],
-    )
+    log.info("Done. articles=%d %s", len(work), " ".join(f"{k}={v}" for k, v in counts.items()))
     # Fail the job (GitHub emails you) only when something needs a human: every feed down, an article
     # that has used up its retries, or a Gemini quota too small for the day's news. Transient errors are
     # retried on the next run.
