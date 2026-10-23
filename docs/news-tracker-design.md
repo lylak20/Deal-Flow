@@ -232,5 +232,6 @@ Deal Flow/
 - **추출 모델을 Gemini에서 Claude Haiku 5.5로 변경 (2026-10-23):** Gemini 무료 등급은 `gemini-3.8-flash` 기준 하루 20회까지만 호출할 수 있어서, 첫 실행(후보 13건 + 재시도)에서 한도를 다 썼다. Haiku 5.5($0.10 / $0.50 per MTok, effort `low`)는 기사 1건에 약 $0.0005, 한 달 약 $0.3로 예상된다. 첫 실행에서 13건 중 펀딩 기사 10건을 추출했고, 펀딩이 아닌 3건은 걸러냈다. 원래 목표인 "특정 회사에 종속되지 않기"는 `llm.provider` 설정으로 유지한다. Claude와 Gemini 구현이 모두 `extractor.py`에 있다.
 - **한도 초과 처리:** 하루 한도가 다 찼거나(Gemini) 크레딧이 떨어지면(Claude) 실행을 즉시 멈춘다. 남은 기사는 `pending` 상태로 다음 실행에 넘기고, job을 실패로 표시해 이메일 알림을 보낸다.
 - **대시보드에 안 나오는 라운드:** 라운드가 `Undisclosed`(예: DeepSeek, Warhound)이거나 `Growth`/`Late Stage`인 행은 Raw Database에는 있지만, 프롬프트에서 정한 대시보드 7개 열에는 나오지 않는다.
+- **Email 버튼 추가 (2026-10-23, 원래 계획의 "Automate sending out emails" 1단계):** Raw Database의 Company 왼쪽(B열)에 `✉️ Email` 열을 추가했다. 모든 행에 같은 수식이 들어가고, 각 수식은 `ROW()`로 자기 행의 회사명·라운드·금액을 읽는다. 클릭하면 Gmail 작성 창(`mail.google.com/mail/?view=cm`)이 제목과 본문이 채워진 채로 열린다. 문구는 `Email Template` 탭에서 고친다. 프로그램은 데이터를 RAW로 append한 뒤 새 행의 B열에만 수식을 쓴다. Raw Database의 열 위치는 이제 `RAW_HEADERS`에서 계산한다. 기존 시트는 `setup_sheet.py`를 실행하면 열이 추가되고 버튼이 채워진다. 실제로 메일을 보내는 것은 사람이 한다. 받는 사람 주소(창업자 이메일)는 아직 수집하지 않는다.
 - **3-Month Alerts 탭은 아직 만들지 않았다.** 2단계에서 추가한다.
 - **job 실패 기준:** 피드 하나만 실패하면 경고만 남긴다. job을 실패로 표시하는 경우는 모든 피드를 읽지 못했거나, 기사가 3번 재시도 후에도 실패(`failed`)했을 때뿐이다. 일시적인 오류는 다음 실행에서 자동으로 재시도한다.

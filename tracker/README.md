@@ -62,7 +62,8 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 
 | 탭 | 내용 |
 |---|---|
-| **Raw Database** | 펀딩 이벤트 1건이 1행이에요. 프로그램은 **추가만** 하고 기존 행을 고치거나 지우지 않아요. |
+| **Raw Database** | 펀딩 이벤트 1건이 1행이에요. 프로그램은 **추가만** 하고 기존 행을 고치거나 지우지 않아요. B열 **✉️ Email**을 누르면 그 회사에 맞게 채워진 Gmail 초안이 열려요. 받는 사람은 비어 있어요. |
+| **Email Template** | Email 버튼이 쓰는 제목(B1)과 본문(B2)이에요. 여기만 고치면 모든 버튼에 반영돼요. 쓸 수 있는 자리표시자는 `{Company}` `{Round}` `{Amount}` `{Lead}`예요. 처음에는 본문 끝의 `[Your name]`을 바꿔 주세요. |
 | **Funding Dashboard** | 라운드별 열에 `회사명 (날짜)`가 최신순으로 나와요. 수식으로 자동 생성돼서 프로그램이 건드리지 않아요. |
 | **Article Log** | 처리한 기사 기록이에요. Status는 `pending` → `extracted` / `skipped_not_funding` / `error` 순서로 바뀌고, 3번 실패하면 `failed`가 돼요. |
 

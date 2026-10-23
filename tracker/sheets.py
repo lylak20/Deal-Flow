@@ -15,13 +15,55 @@ from normalize import EventKey, event_key
 RAW = "Raw Database"
 DASHBOARD = "Funding Dashboard"
 ARTICLE_LOG = "Article Log"
+EMAIL_TEMPLATE = "Email Template"
 
+# "Email" holds a per-row button (formula) that opens a pre-filled Gmail draft; the pipeline itself
+# produces the other columns (see main.event_rows, which leaves Email out).
 RAW_HEADERS = [
-    "Date", "Company", "Funding Round", "Amount Raised", "Lead Investor", "Other Investors",
+    "Date", "Email", "Company", "Funding Round", "Amount Raised", "Lead Investor", "Other Investors",
     "Category", "Source", "Article URL", "Date Added",
 ]
 LOG_HEADERS = ["Article URL", "Source", "Title", "Published", "Fetched At", "Status", "Attempts", "Error"]
 DASHBOARD_ROUNDS = ["Pre-Seed", "Seed", "Series A", "Series B", "Series C", "Series D", "Series E+"]
+
+DEFAULT_SUBJECT = "Congrats on the {Round}, {Company}"
+DEFAULT_BODY = """Hi {Company} team,
+
+Congratulations on your {Round}{Amount}! I saw the news and would love to learn more about what you're building.
+
+Would you be open to a quick intro call in the next couple of weeks?
+
+Best,
+[Your name]"""
+
+
+def col(header: str) -> str:
+    """Column letter of a Raw Database header (the sheet has fewer than 26 columns)."""
+    return chr(ord("A") + RAW_HEADERS.index(header))
+
+
+EMAIL_COL = col("Email")
+
+
+def email_formula() -> str:
+    """Same formula on every row: it reads its own row via ROW(), so rows can be appended without editing it.
+
+    Placeholders in the Email Template tab: {Company}, {Round} ("recent round" if unknown),
+    {Amount} (" ($66M)" or nothing if undisclosed), {Lead} ("your investors" if unknown).
+    """
+    c, rd, am, ld = (f"${col(h)}:${col(h)}" for h in ("Company", "Funding Round", "Amount Raised", "Lead Investor"))
+    t = f"'{EMAIL_TEMPLATE}'"
+    return (
+        f'=LET(r, ROW(), co, INDEX({c}, r), IF(co = "", "", LET('
+        f'rd, INDEX({rd}, r), am, INDEX({am}, r), ld, INDEX({ld}, r), '
+        f'rnd, IF(OR(rd = "", rd = "Undisclosed"), "recent round", rd), '
+        f'amt, IF(OR(am = "", am = "Undisclosed"), "", " (" & am & ")"), '
+        f'lead, IF(ld = "", "your investors", ld), '
+        f'fill, LAMBDA(x, SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(x, "{{Company}}", co), '
+        f'"{{Round}}", rnd), "{{Amount}}", amt), "{{Lead}}", lead)), '
+        f'HYPERLINK("https://mail.google.com/mail/?view=cm&fs=1&su=" & ENCODEURL(fill({t}!$B$1)) '
+        f'& "&body=" & ENCODEURL(fill({t}!$B$2)), "✉️ Email"))))'
+    )
 
 
 @dataclass
@@ -51,6 +93,12 @@ def open_spreadsheet() -> gspread.Spreadsheet:
     return gspread.service_account_from_dict(info).open_by_key(os.environ["SHEET_ID"])
 
 
+def add_email_buttons(ws: gspread.Worksheet, first_row: int, last_row: int) -> None:
+    if last_row >= first_row:
+        ws.update([[email_formula()]] * (last_row - first_row + 1),
+                  f"{EMAIL_COL}{first_row}:{EMAIL_COL}{last_row}", value_input_option="USER_ENTERED")
+
+
 def _first_row(append_response: dict) -> int:
     # e.g. "'Article Log'!A12:H14" -> 12
     rng = append_response["updates"]["updatedRange"]
@@ -63,8 +111,9 @@ class SheetStore:
         self._log = spreadsheet.worksheet(ARTICLE_LOG)
 
     def existing_events(self) -> list[EventKey]:
-        rows = self._raw.get("A2:C")
-        return [event_key(r[1], r[2], r[0]) for r in rows if len(r) >= 3]
+        d, c, rd = (RAW_HEADERS.index(h) for h in ("Date", "Company", "Funding Round"))
+        rows = self._raw.get(f"A2:{col('Funding Round')}")
+        return [event_key(r[c], r[rd], r[d]) for r in rows if len(r) > rd]
 
     def article_log(self) -> dict[str, LogEntry]:
         entries = {}
@@ -91,8 +140,15 @@ class SheetStore:
         return {a.url: LogEntry(row=start + i, article=a, status="pending", attempts=0) for i, a in enumerate(articles)}
 
     def append_events(self, rows: list[list[str]]) -> None:
-        if rows:
-            self._raw.append_rows(rows, value_input_option="RAW", table_range="A1")
+        """rows: every Raw Database column except Email, in header order."""
+        if not rows:
+            return
+        i = RAW_HEADERS.index("Email")
+        # Data goes in RAW so nothing is reinterpreted (dates stay text, "=..." names stay text) ...
+        resp = self._raw.append_rows([r[:i] + [""] + r[i:] for r in rows], value_input_option="RAW", table_range="A1")
+        # ... and only the Email buttons are written as formulas.
+        start = _first_row(resp)
+        add_email_buttons(self._raw, start, start + len(rows) - 1)
 
     def update_statuses(self, updates: list[tuple[int, str, int, str]]) -> None:
         """updates: (row, status, attempts, error)."""
