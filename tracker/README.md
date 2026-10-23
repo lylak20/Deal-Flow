@@ -39,7 +39,7 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 ```
 
 ### 5. GitHub에서 자동 실행
-1. 저장소를 **비공개(Private)** 로 GitHub에 올려요. 공개 저장소는 60일 동안 활동이 없으면 예약 실행이 꺼져요.
+1. 저장소를 GitHub에 올려요. 공개 저장소는 60일 동안 커밋이 없으면 예약 실행이 꺼지니, 그때는 Actions 탭에서 다시 켜요.
 2. 저장소 **Settings → Secrets and variables → Actions → New repository secret**에서 다음 3개를 추가해요.
    | 이름 | 값 |
    |---|---|

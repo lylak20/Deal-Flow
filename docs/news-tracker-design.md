@@ -223,7 +223,7 @@ Deal Flow/
 
 1. **소스:** TechCrunch(Funding 태그 + Venture 카테고리), PR Newswire, Crunchbase News를 쓴다. VentureBeat도 유지하기로 했지만 현재 피드가 봇 차단 확인 화면(HTTP 429)을 돌려줘서 `config.yaml`에서 `enabled: false`로 꺼 두었다. 차단 우회는 하지 않는다.
 2. **중복 판단:** 같은 회사 + 같은 라운드가 **±7일** 안에 있으면 중복으로 본다 (`dedup_window_days: 7`).
-3. **저장소:** GitHub 비공개 저장소로 운영한다.
+3. **저장소:** ~~비공개~~ → 기존 공개 저장소 `lylak20/Deal-Flow`를 그대로 쓴다 (2026-10-23 변경). 공개 저장소는 60일 동안 커밋이 없으면 예약 실행이 자동으로 꺼진다. 그러면 Actions 탭에서 다시 켜야 한다. 키는 GitHub Secrets에만 둔다.
 4. **추출 모델:** ~~`gemini-3.8-flash`~~ → **`claude-haiku-5-5`** (2026-10-23 변경, 10절 참고). `config.yaml`의 `llm.provider`로 Gemini로 되돌릴 수 있다.
 5. **준비물 (직접 해야 하는 것):** Anthropic API 키 발급, Google Cloud 서비스 계정 생성, 시트 공유. 단계별 방법은 [tracker/README.md](../tracker/README.md)에 있다.
 
