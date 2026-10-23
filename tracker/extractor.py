@@ -1,10 +1,9 @@
-"""3. Fundraise Extractor: ask Gemini for structured funding events in an article."""
+"""3. Fundraise Extractor: ask an LLM (Claude or Gemini, set in config.yaml) for structured funding events."""
 
 import logging
+import re
 import time
 
-from google import genai
-from google.genai import types
 from pydantic import BaseModel
 
 from collector import Article
@@ -53,18 +52,66 @@ class Extraction(BaseModel):
     events: list[FundingEvent]
 
 
-class Extractor:
-    def __init__(self, api_key: str, config: dict):
+class QuotaExhausted(Exception):
+    """The provider won't accept more requests for a long time (daily quota hit, credits used up)."""
+
+
+def _prompt(article: Article, text: str) -> str:
+    published = article.published.date().isoformat() if article.published else "unknown"
+    return f"Source: {article.source}\nPublished: {published}\nURL: {article.url}\n\n{text}"
+
+
+class ClaudeExtractor:
+    def __init__(self, api_key: str, settings: dict):
+        import anthropic
+
+        self._anthropic = anthropic
+        # The SDK itself retries 429/5xx/connection errors with backoff.
+        self._client = anthropic.Anthropic(api_key=api_key, max_retries=settings["max_retries"])
+        self._model = settings["model"]
+        self._effort = settings["effort"]
+
+    def extract(self, article: Article, text: str) -> Extraction:
+        try:
+            resp = self._client.messages.parse(
+                model=self._model,
+                max_tokens=4096,
+                system=SYSTEM_INSTRUCTION,
+                messages=[{"role": "user", "content": _prompt(article, text)}],
+                output_format=Extraction,
+                output_config={"effort": self._effort},
+            )
+        except self._anthropic.BadRequestError as e:
+            if "credit balance" in str(e).lower():
+                raise QuotaExhausted("Anthropic credit balance is too low; top up at platform.claude.com") from e
+            raise
+        if resp.stop_reason == "refusal":
+            raise RuntimeError(f"Claude declined this article ({getattr(resp.stop_details, 'category', None)})")
+        if resp.stop_reason == "max_tokens":
+            raise RuntimeError("Response was cut off at max_tokens")
+        return resp.parsed_output
+
+
+def _retry_delay_seconds(error: Exception) -> float | None:
+    """The server-suggested wait from a Gemini 429 response, if any."""
+    m = re.search(r"retryDelay'?\"?:\s*'?\"?(\d+(?:\.\d+)?)s", str(error))
+    return float(m.group(1)) if m else None
+
+
+class GeminiExtractor:
+    def __init__(self, api_key: str, settings: dict):
+        from google import genai
+        from google.genai import types
+
+        self._types = types
         self._client = genai.Client(api_key=api_key)
-        self._model = config["gemini"]["model"]
-        self._min_interval = config["gemini"]["min_seconds_between_calls"]
-        self._max_retries = config["gemini"]["max_retries"]
+        self._model = settings["model"]
+        self._min_interval = settings["min_seconds_between_calls"]
+        self._max_retries = settings["max_retries"]
         self._last_call = 0.0
 
     def extract(self, article: Article, text: str) -> Extraction:
-        published = article.published.date().isoformat() if article.published else "unknown"
-        prompt = f"Source: {article.source}\nPublished: {published}\nURL: {article.url}\n\n{text}"
-        config = types.GenerateContentConfig(
+        config = self._types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
             response_schema=Extraction,
@@ -76,12 +123,30 @@ class Extractor:
                 time.sleep(wait)
             self._last_call = time.monotonic()
             try:
-                resp = self._client.models.generate_content(model=self._model, contents=prompt, config=config)
+                resp = self._client.models.generate_content(
+                    model=self._model, contents=_prompt(article, text), config=config)
                 return resp.parsed if isinstance(resp.parsed, Extraction) else Extraction.model_validate_json(resp.text)
             except Exception as e:
+                delay = _retry_delay_seconds(e) if getattr(e, "code", None) == 429 else None
+                if delay is not None and delay > 120:
+                    raise QuotaExhausted(f"Gemini quota exhausted for {self._model}; resets in ~{delay / 3600:.1f}h") from e
                 if attempt == self._max_retries:
                     raise
-                backoff = 10 * attempt
+                backoff = delay or 10 * attempt
                 log.warning("Gemini call failed (%s); retrying in %ds", e, backoff)
                 time.sleep(backoff)
         raise AssertionError("unreachable")
+
+
+PROVIDERS = {
+    "claude": (ClaudeExtractor, "ANTHROPIC_API_KEY"),
+    "gemini": (GeminiExtractor, "GEMINI_API_KEY"),
+}
+
+
+def make_extractor(config: dict, env: dict):
+    provider = config["llm"]["provider"]
+    cls, key_var = PROVIDERS[provider]
+    if not env.get(key_var):
+        raise SystemExit(f"{key_var} is not set (needed for llm.provider: {provider})")
+    return cls(env[key_var], config["llm"][provider])

@@ -17,7 +17,7 @@ import yaml
 from dotenv import load_dotenv
 
 from collector import Article, collect
-from extractor import Extractor
+from extractor import QuotaExhausted, make_extractor
 from normalize import EventKey, event_key, is_duplicate, normalize_amount, normalize_round, parse_date
 from parser import article_text
 
@@ -71,7 +71,7 @@ def main() -> int:
                   else f"(no date)  [{a.source}]  {a.title}\n    {a.url}")
         return 1 if len(failed_sources) == len(enabled) else 0
 
-    extractor = Extractor(os.environ["GEMINI_API_KEY"], config)
+    extractor = make_extractor(config, os.environ)
     max_attempts = config["max_attempts_per_article"]
     window = config["dedup_window_days"]
 
@@ -91,9 +91,15 @@ def main() -> int:
 
     all_rows, statuses = [], []
     counts = {"funding": 0, "not_funding": 0, "duplicates": 0, "errors": 0, "failed": 0}
+    quota_error = None
     for row, article, attempts in work.values():
         try:
             extraction = extractor.extract(article, article_text(article, config))
+        except QuotaExhausted as e:
+            # Not the article's fault: leave it and the rest "pending" (attempts unchanged) for the next run.
+            quota_error = e
+            log.error("%s. Stopping; unprocessed articles stay pending.", e)
+            break
         except Exception as e:
             attempts += 1
             status = "failed" if attempts >= max_attempts else "error"
@@ -125,9 +131,10 @@ def main() -> int:
         len(work), counts["funding"], len(all_rows), counts["duplicates"], counts["not_funding"],
         counts["errors"], counts["failed"],
     )
-    # Fail the job (GitHub emails you) only when something needs a human: every feed down, or an article
-    # that has used up its retries. Transient errors are retried on the next run.
-    return 1 if counts["failed"] or len(failed_sources) == len(enabled) else 0
+    # Fail the job (GitHub emails you) only when something needs a human: every feed down, an article
+    # that has used up its retries, or a Gemini quota too small for the day's news. Transient errors are
+    # retried on the next run.
+    return 1 if counts["failed"] or quota_error or len(failed_sources) == len(enabled) else 0
 
 
 if __name__ == "__main__":

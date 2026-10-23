@@ -1,18 +1,21 @@
 # News Tracker
 
-TechCrunch, PR Newswire, Crunchbase News에서 스타트업 펀딩 뉴스를 매일 2회 수집하는 프로그램이에요. Gemini로 펀딩 정보만 뽑아서 Google Sheet **"VC Fundraising Tracker"** 에 계속 추가해요.
+TechCrunch, PR Newswire, Crunchbase News에서 스타트업 펀딩 뉴스를 매일 2회 수집하는 프로그램이에요. Claude Haiku 5.5로 펀딩 정보만 뽑아서 Google Sheet **"VC Fundraising Tracker"** 에 계속 추가해요.
 설계 문서: [../docs/news-tracker-design.md](../docs/news-tracker-design.md)
 
 ```
 collector.py  → parser.py   → extractor.py → sheets.py
-(RSS + 키워드)   (기사 본문)    (Gemini JSON)   (중복 제거 후 append)
+(RSS + 키워드)   (기사 본문)    (Claude JSON)   (중복 제거 후 append)
 ```
 
 ## 처음 한 번만 하는 설정
 
-### 1. Gemini API 키
-1. https://aistudio.google.com/apikey 에서 **Create API key**를 눌러요.
+### 1. Anthropic API 키
+1. https://platform.claude.com/settings/keys 에서 키를 만들어요. API 요금은 claude.ai 구독과 별개라서 크레딧을 미리 충전해야 해요.
 2. 키를 복사해 두세요. 아래 `.env`와 GitHub Secrets에 넣어요.
+3. 예상 비용: 기사 1건에 약 $0.0005, 한 달 약 $0.3 (하루 20건 기준).
+
+Gemini를 쓰려면 `config.yaml`의 `llm.provider`를 `gemini`로 바꾸고 `GEMINI_API_KEY`를 넣으면 돼요. 단, 무료 등급은 하루 20번 정도만 호출할 수 있어서 매일 실행하기에는 부족해요.
 
 ### 2. Google 서비스 계정 (프로그램이 시트에 쓰기 위한 계정)
 1. https://console.cloud.google.com 에서 새 프로젝트를 만들어요. 예: `deal-flow`
@@ -40,7 +43,7 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 2. 저장소 **Settings → Secrets and variables → Actions → New repository secret**에서 다음 3개를 추가해요.
    | 이름 | 값 |
    |---|---|
-   | `GEMINI_API_KEY` | Gemini 키 |
+   | `ANTHROPIC_API_KEY` | Anthropic API 키 |
    | `GOOGLE_SERVICE_ACCOUNT_JSON` | `service-account.json` 파일 **내용 전체**를 붙여넣기 |
    | `SHEET_ID` | 시트 ID |
 3. **Actions → News Tracker → Run workflow**로 한 번 수동 실행해 확인해요.
@@ -50,7 +53,7 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 
 ```powershell
 .venv\Scripts\python main.py --dry-run    # 후보 기사 목록만 보기 (키 없어도 됨)
-.venv\Scripts\python main.py --no-write   # Gemini로 추출해서 출력만, 시트에는 안 씀
+.venv\Scripts\python main.py --no-write   # 추출해서 출력만, 시트에는 안 씀
 .venv\Scripts\python main.py              # 실제 실행
 .venv\Scripts\python -m pytest            # 테스트
 ```
@@ -69,5 +72,5 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 
 ## 설정 바꾸기 (`config.yaml`)
 - 소스 추가/끄기: `sources`에 항목을 추가하거나 `enabled: false`로 설정해요. VentureBeat는 봇 차단(HTTP 429) 때문에 현재 꺼져 있어요.
-- 모델: `gemini.model`. 더 저렴하게 쓰고 싶으면 Flash-Lite 계열로 바꿀 수 있어요.
+- 모델: `llm.provider`로 Claude와 Gemini 중에 고르고, `llm.claude.model` / `llm.gemini.model`로 모델을 정해요.
 - 키워드, 조회 기간, 중복 판단 기간도 여기서 바꿔요.

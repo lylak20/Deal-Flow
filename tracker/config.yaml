@@ -13,10 +13,19 @@ max_attempts_per_article: 3
 # (PR Newswire and TechCrunch often report one round on different days).
 dedup_window_days: 7
 
-gemini:
-  model: gemini-3.8-flash
-  min_seconds_between_calls: 4
-  max_retries: 3
+llm:
+  # Which model reads the articles: "claude" or "gemini". Each needs its own API key in the environment.
+  provider: claude
+  claude:
+    model: claude-haiku-5-5
+    # Simple extraction doesn't need deep reasoning; "low" keeps output tokens (and cost) down.
+    effort: low
+    max_retries: 3
+  gemini:
+    # The free tier allows only ~20 requests/day per model, which is not enough for a daily run.
+    model: gemini-3.8-flash
+    min_seconds_between_calls: 4
+    max_retries: 3
 
 http:
   timeout_seconds: 20

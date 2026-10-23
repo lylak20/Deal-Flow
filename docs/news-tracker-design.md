@@ -1,7 +1,8 @@
 # News Tracker — 시스템 설계
 
 > 출처: Google Docs "AI Agent 만들기"의 Claude Code 프롬프트 (VC Fundraising Tracker)
-> 상태: 1단계 구현 완료 (`tracker/`) · Gemini/Sheets 실제 연결은 키 발급 후 확인 필요 · 2026-10-22
+> 상태: 1단계 구현 완료 (`tracker/`), 로컬에서 실제 시트에 10건 기록 확인 · 2026-10-23
+> 추출 모델은 Gemini에서 **Claude Haiku 5.5**로 바뀌었다 (10절 참고). 아래 3.3절 등의 "Gemini"는 처음 설계할 때 기준이다.
 
 ---
 
@@ -223,10 +224,13 @@ Deal Flow/
 1. **소스:** TechCrunch(Funding 태그 + Venture 카테고리), PR Newswire, Crunchbase News를 쓴다. VentureBeat도 유지하기로 했지만 현재 피드가 봇 차단 확인 화면(HTTP 429)을 돌려줘서 `config.yaml`에서 `enabled: false`로 꺼 두었다. 차단 우회는 하지 않는다.
 2. **중복 판단:** 같은 회사 + 같은 라운드가 **±7일** 안에 있으면 중복으로 본다 (`dedup_window_days: 7`).
 3. **저장소:** GitHub 비공개 저장소로 운영한다.
-4. **Gemini 모델:** `gemini-3.8-flash` (2026-09 GA, 현재 최신 Flash 모델). `config.yaml`에서 바꿀 수 있다.
-5. **준비물 (직접 해야 하는 것):** Gemini API 키 발급, Google Cloud 서비스 계정 생성, 시트 공유. 단계별 방법은 [tracker/README.md](../tracker/README.md)에 있다.
+4. **추출 모델:** ~~`gemini-3.8-flash`~~ → **`claude-haiku-5-5`** (2026-10-23 변경, 10절 참고). `config.yaml`의 `llm.provider`로 Gemini로 되돌릴 수 있다.
+5. **준비물 (직접 해야 하는 것):** Anthropic API 키 발급, Google Cloud 서비스 계정 생성, 시트 공유. 단계별 방법은 [tracker/README.md](../tracker/README.md)에 있다.
 
 ## 10. 구현하면서 바뀐 점
 - **IPv4 전용 연결 (`http.ipv4_only`):** 개발 PC는 IPv6가 막혀 있어서 요청마다 약 40초씩 지연됐다. IPv4만 쓰도록 바꾼 뒤 수집 시간이 2분에서 3초로 줄었다.
+- **추출 모델을 Gemini에서 Claude Haiku 5.5로 변경 (2026-10-23):** Gemini 무료 등급은 `gemini-3.8-flash` 기준 하루 20회까지만 호출할 수 있어서, 첫 실행(후보 13건 + 재시도)에서 한도를 다 썼다. Haiku 5.5($0.10 / $0.50 per MTok, effort `low`)는 기사 1건에 약 $0.0005, 한 달 약 $0.3로 예상된다. 첫 실행에서 13건 중 펀딩 기사 10건을 추출했고, 펀딩이 아닌 3건은 걸러냈다. 원래 목표인 "특정 회사에 종속되지 않기"는 `llm.provider` 설정으로 유지한다. Claude와 Gemini 구현이 모두 `extractor.py`에 있다.
+- **한도 초과 처리:** 하루 한도가 다 찼거나(Gemini) 크레딧이 떨어지면(Claude) 실행을 즉시 멈춘다. 남은 기사는 `pending` 상태로 다음 실행에 넘기고, job을 실패로 표시해 이메일 알림을 보낸다.
+- **대시보드에 안 나오는 라운드:** 라운드가 `Undisclosed`(예: DeepSeek, Warhound)이거나 `Growth`/`Late Stage`인 행은 Raw Database에는 있지만, 프롬프트에서 정한 대시보드 7개 열에는 나오지 않는다.
 - **3-Month Alerts 탭은 아직 만들지 않았다.** 2단계에서 추가한다.
 - **job 실패 기준:** 피드 하나만 실패하면 경고만 남긴다. job을 실패로 표시하는 경우는 모든 피드를 읽지 못했거나, 기사가 3번 재시도 후에도 실패(`failed`)했을 때뿐이다. 일시적인 오류는 다음 실행에서 자동으로 재시도한다.

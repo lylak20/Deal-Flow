@@ -1,6 +1,7 @@
 feedparser>=6.0
 requests>=2.32
 trafilatura>=2.0
+anthropic>=1.0
 google-genai>=1.0
 gspread>=6.1
 PyYAML>=6.0
