@@ -68,3 +68,11 @@ def test_duplicate_rule_from_spec():
     # Different company -> add.
     assert not is_duplicate(event_key("Blacksmith", "Series A", "2026-10-20"), existing, 7)
     assert date(2026, 10, 20) == existing[0].date
+
+
+def test_configured_window_skips_repeat_mentions_but_keeps_new_rounds():
+    existing = [event_key("Legora", "Series E+", "2026-10-21")]
+    # A follow-up article weeks later about the same round -> skip.
+    assert is_duplicate(event_key("Legora", "Series E+", "2026-12-15"), existing, 365)
+    # The company's next round -> add.
+    assert not is_duplicate(event_key("Legora", "Growth", "2027-06-01"), existing, 365)

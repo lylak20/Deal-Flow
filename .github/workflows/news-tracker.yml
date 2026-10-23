@@ -2,10 +2,11 @@ name: News Tracker
 
 on:
   schedule:
-    # 22:00 and 10:00 UTC = 07:00 and 19:00 KST. Twice a day because the PR Newswire feed
-    # only holds ~34 hours of releases.
-    - cron: "0 22 * * *"
-    - cron: "0 10 * * *"
+    # Once a day at 07:00 Pacific. GitHub cron is UTC-only, so both candidate times are scheduled
+    # and the "when" step keeps the one that is 07:00 in Los Angeles today:
+    #   14:00 UTC = 07:00 PDT (summer),  15:00 UTC = 07:00 PST (winter).
+    - cron: "0 14 * * *"
+    - cron: "0 15 * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -20,14 +21,30 @@ jobs:
       run:
         working-directory: tracker
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - id: when
+        name: Check it is 07:00 Pacific
+        working-directory: .
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual run"; echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          zone=$(TZ=America/Los_Angeles date +%Z)
+          if [ "$zone" = "PDT" ]; then want="0 14 * * *"; else want="0 15 * * *"; fi
+          if [ "${{ github.event.schedule }}" = "$want" ]; then run=true; else run=false; fi
+          echo "Los Angeles is on $zone; trigger '${{ github.event.schedule }}' -> run=$run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - if: steps.when.outputs.run == 'true'
+        uses: actions/checkout@v4
+      - if: steps.when.outputs.run == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: tracker/requirements.txt
-      - run: pip install -r requirements.txt
-      - run: python main.py
+      - if: steps.when.outputs.run == 'true'
+        run: pip install -r requirements.txt
+      - if: steps.when.outputs.run == 'true'
+        run: python main.py
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

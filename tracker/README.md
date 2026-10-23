@@ -1,6 +1,6 @@
 # News Tracker
 
-TechCrunch, PR Newswire, Crunchbase News에서 스타트업 펀딩 뉴스를 매일 2회 수집하는 프로그램이에요. Claude Haiku 5.5로 펀딩 정보만 뽑아서 Google Sheet **"VC Fundraising Tracker"** 에 계속 추가해요.
+TechCrunch, PR Newswire, Crunchbase News에서 스타트업 펀딩 뉴스를 매일 오전 7시(미국 태평양 시간)에 수집하는 프로그램이에요. Claude Haiku 5.5로 펀딩 정보만 뽑아서 Google Sheet **"VC Fundraising Tracker"** 에 계속 추가해요.
 설계 문서: [../docs/news-tracker-design.md](../docs/news-tracker-design.md)
 
 ```
@@ -47,7 +47,7 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
    | `GOOGLE_SERVICE_ACCOUNT_JSON` | `service-account.json` 파일 **내용 전체**를 붙여넣기 |
    | `SHEET_ID` | 시트 ID |
 3. **Actions → News Tracker → Run workflow**로 한 번 수동 실행해 확인해요.
-4. 이후에는 매일 한국시간 07:00, 19:00에 자동으로 실행돼요. 실행이 실패하면 GitHub이 이메일을 보내요.
+4. 이후에는 매일 **오전 7시 PT**(미국 태평양 시간, 서머타임 자동 반영)에 자동으로 실행돼요. 이전에 기록한 행은 그대로 두고 새 회사만 아래에 추가해요. 실행이 실패하면 GitHub이 이메일을 보내요.
 
 ## 실행 방법
 
@@ -67,7 +67,7 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 | **Funding Dashboard** | 라운드별 열에 `회사명 (날짜)`가 최신순으로 나와요. 수식으로 자동 생성돼서 프로그램이 건드리지 않아요. |
 | **Article Log** | 처리한 기사 기록이에요. Status는 `pending` → `extracted` / `skipped_not_funding` / `error` 순서로 바뀌고, 3번 실패하면 `failed`가 돼요. |
 
-- **중복 규칙:** 같은 회사(이름 표기 차이는 무시)의 같은 라운드가 **±7일** 안에 이미 있으면 건너뛰어요.
+- **중복 규칙:** 같은 회사(이름 표기 차이는 무시)의 같은 라운드가 **1년(365일)** 안에 이미 있으면 건너뛰어요. 같은 회사라도 새 라운드(예: Series A → B)면 새 행으로 추가해요. 이미 처리한 기사 URL은 Article Log로 걸러서 다시 처리하지 않아요.
 - **오류 처리:** `error` 상태인 기사는 다음 실행 때 다시 시도해요. 직접 다시 처리하고 싶으면 Article Log에서 Status를 `pending`으로, Attempts를 `0`으로 바꾸면 돼요.
 - **job이 실패로 표시되는 경우:** 모든 피드를 읽지 못했을 때, 또는 3번 재시도해도 추출에 실패한 기사가 있을 때예요.
 

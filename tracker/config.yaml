@@ -9,9 +9,10 @@ max_article_chars: 6000
 # An article that fails extraction this many times is marked "failed" and no longer retried.
 max_attempts_per_article: 3
 
-# Same company + same round within this many days counts as the same funding event
-# (PR Newswire and TechCrunch often report one round on different days).
-dedup_window_days: 7
+# Same company + same round within this many days counts as the same funding event, so a company
+# already in the sheet isn't added again when later articles mention the same round. A new round
+# (e.g. Series A -> Series B) is still added as a new row.
+dedup_window_days: 365
 
 llm:
   # Which model reads the articles: "claude" or "gemini". Each needs its own API key in the environment.

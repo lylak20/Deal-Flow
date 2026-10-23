@@ -12,7 +12,7 @@ GitHub Actions가 매일 Python 스크립트를 실행 → TechCrunch / PR Newsw
 기존 Deal Flow 웹사이트(Vercel)는 이 시트를 **읽어서 보여주는 화면**으로 바뀐다.
 
 ```
- ┌──────────────── GitHub Actions (매일 2회, 무료) ────────────────┐
+ ┌──────────────── GitHub Actions (매일 7am PT, 무료) ────────────────┐
  │                                                               │
  │  1. News Collector  →  2. Article Parser  →  3. Fundraise     │
  │     (RSS 수집,           (기사 본문           Extractor        │
@@ -143,7 +143,7 @@ G1: Series E+    G2: (같은 수식, "Series E+")
 | Vercel Cron + Python 함수 | 웹사이트와 같은 곳에서 관리 | Hobby 플랜은 cron이 하루 1회로 제한되고 함수 실행 시간 제한이 있음. 기사 수십 개를 처리하다 시간 초과 위험 | ❌ |
 | 내 PC 작업 스케줄러 | 간단함 | PC가 꺼져 있으면 실행 안 됨 | ❌ |
 
-- `.github/workflows/news-tracker.yml`: `schedule: cron` (UTC 22:00, 10:00 = 한국시간 07:00, 19:00) + 수동 실행 버튼 `workflow_dispatch`.
+- `.github/workflows/news-tracker.yml`: ~~UTC 22:00, 10:00 (한국시간 07:00, 19:00)~~ → 매일 **07:00 PT** 1회 (10절 참고) + 수동 실행 버튼 `workflow_dispatch`.
 - Secrets: `GEMINI_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, `SHEET_ID`.
 - 주의: **공개** 저장소는 60일 동안 활동이 없으면 예약 실행이 자동으로 꺼진다. 비공개 저장소로 쓰는 것을 권장한다.
 - 실패 처리: 소스 하나가 실패해도 나머지는 계속 진행한다. 실행이 끝나면 요약(수집 N / 펀딩 M / 저장 K / 오류 E)을 Actions 로그에 남긴다. 오류가 있으면 job을 실패로 표시해 GitHub이 이메일을 보내게 한다.
@@ -161,7 +161,7 @@ Deal Flow/
 ├── vercel.json
 ├── .vercelignore               # 새로 추가: tracker/ 를 Vercel 배포에서 제외
 ├── .github/workflows/
-│   └── news-tracker.yml        # 매일 2회 실행
+│   └── news-tracker.yml        # 매일 7am PT 실행
 ├── docs/
 │   └── news-tracker-design.md  # 이 문서
 └── tracker/
@@ -222,7 +222,7 @@ Deal Flow/
 ## 9. 확정된 결정 (2026-10-22)
 
 1. **소스:** TechCrunch(Funding 태그 + Venture 카테고리), PR Newswire, Crunchbase News를 쓴다. VentureBeat도 유지하기로 했지만 현재 피드가 봇 차단 확인 화면(HTTP 429)을 돌려줘서 `config.yaml`에서 `enabled: false`로 꺼 두었다. 차단 우회는 하지 않는다.
-2. **중복 판단:** 같은 회사 + 같은 라운드가 **±7일** 안에 있으면 중복으로 본다 (`dedup_window_days: 7`).
+2. **중복 판단:** ~~±7일~~ → 같은 회사 + 같은 라운드가 **365일** 안에 있으면 중복으로 본다 (`dedup_window_days: 365`, 2026-10-23 변경). 새 라운드는 새 행으로 추가한다.
 3. **저장소:** ~~비공개~~ → 기존 공개 저장소 `lylak20/Deal-Flow`를 그대로 쓴다 (2026-10-23 변경). 공개 저장소는 60일 동안 커밋이 없으면 예약 실행이 자동으로 꺼진다. 그러면 Actions 탭에서 다시 켜야 한다. 키는 GitHub Secrets에만 둔다.
 4. **추출 모델:** ~~`gemini-3.8-flash`~~ → **`claude-haiku-5-5`** (2026-10-23 변경, 10절 참고). `config.yaml`의 `llm.provider`로 Gemini로 되돌릴 수 있다.
 5. **준비물 (직접 해야 하는 것):** Anthropic API 키 발급, Google Cloud 서비스 계정 생성, 시트 공유. 단계별 방법은 [tracker/README.md](../tracker/README.md)에 있다.
@@ -233,5 +233,7 @@ Deal Flow/
 - **한도 초과 처리:** 하루 한도가 다 찼거나(Gemini) 크레딧이 떨어지면(Claude) 실행을 즉시 멈춘다. 남은 기사는 `pending` 상태로 다음 실행에 넘기고, job을 실패로 표시해 이메일 알림을 보낸다.
 - **대시보드에 안 나오는 라운드:** 라운드가 `Undisclosed`(예: DeepSeek, Warhound)이거나 `Growth`/`Late Stage`인 행은 Raw Database에는 있지만, 프롬프트에서 정한 대시보드 7개 열에는 나오지 않는다.
 - **Email 버튼 추가 (2026-10-23, 원래 계획의 "Automate sending out emails" 1단계):** Raw Database의 Company 왼쪽(B열)에 `✉️ Email` 열을 추가했다. 모든 행에 같은 수식이 들어가고, 각 수식은 `ROW()`로 자기 행의 회사명·라운드·금액을 읽는다. 클릭하면 Gmail 작성 창(`mail.google.com/mail/?view=cm`)이 제목과 본문이 채워진 채로 열린다. 문구는 `Email Template` 탭에서 고친다. 프로그램은 데이터를 RAW로 append한 뒤 새 행의 B열에만 수식을 쓴다. Raw Database의 열 위치는 이제 `RAW_HEADERS`에서 계산한다. 기존 시트는 `setup_sheet.py`를 실행하면 열이 추가되고 버튼이 채워진다. 실제로 메일을 보내는 것은 사람이 한다. 받는 사람 주소(창업자 이메일)는 아직 수집하지 않는다.
+- **실행 일정을 하루 1회 07:00 PT로 변경 (2026-10-23):** GitHub cron은 UTC 기준이라 14:00 UTC(PDT일 때 07:00)와 15:00 UTC(PST일 때 07:00)를 둘 다 예약한다. 그리고 첫 단계에서 오늘 LA 시간대에 맞는 쪽만 실행한다. 비교 기준이 실행된 시각이 아니라 예약 문자열(`github.event.schedule`)이라서 GitHub 실행이 늦어져도 하루에 정확히 한 번 돈다. 이전 기록은 지우지 않고 새 회사만 아래에 추가한다. 같은 라운드가 나중 기사에서 다시 나와도 추가되지 않도록 중복 판단 기간을 365일로 늘렸다.
+  - **알려진 위험:** PR Newswire RSS는 페이지 기능 없이 최근 20건(약 34~38시간)만 준다. 하루 1회 실행이면 평소에는 충분하지만, 보도자료가 몰리는 날 24시간 동안 20건을 넘으면 넘친 기사는 놓친다.
 - **3-Month Alerts 탭은 아직 만들지 않았다.** 2단계에서 추가한다.
 - **job 실패 기준:** 피드 하나만 실패하면 경고만 남긴다. job을 실패로 표시하는 경우는 모든 피드를 읽지 못했거나, 기사가 3번 재시도 후에도 실패(`failed`)했을 때뿐이다. 일시적인 오류는 다음 실행에서 자동으로 재시도한다.
