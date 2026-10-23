@@ -70,6 +70,14 @@ def test_duplicate_rule_from_spec():
     assert date(2026, 10, 20) == existing[0].date
 
 
+def test_undisclosed_round_matches_a_named_round_of_the_same_company():
+    existing = [event_key("Warhound", "Undisclosed", "2026-10-22")]
+    assert is_duplicate(event_key("Warhound", "Seed", "2026-10-23"), existing, 365)
+    named = [event_key("Warhound", "Seed", "2026-10-23")]
+    assert is_duplicate(event_key("Warhound", "Undisclosed", "2026-10-24"), named, 365)
+    assert not is_duplicate(event_key("Other Co", "Undisclosed", "2026-10-23"), existing, 365)
+
+
 def test_configured_window_skips_repeat_mentions_but_keeps_new_rounds():
     existing = [event_key("Legora", "Series E+", "2026-10-21")]
     # A follow-up article weeks later about the same round -> skip.

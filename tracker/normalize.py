@@ -127,7 +127,11 @@ def event_key(company: str, round_: str, when: str | date | None) -> EventKey:
 
 def is_duplicate(candidate: EventKey, existing: list[EventKey], window_days: int) -> bool:
     for other in existing:
-        if other.company != candidate.company or other.round != candidate.round:
+        if other.company != candidate.company:
+            continue
+        # One article may name the round while another doesn't ("Warhound raises $200M" vs "...$200M seed"):
+        # an Undisclosed round matches any round of the same company.
+        if other.round != candidate.round and "Undisclosed" not in (other.round, candidate.round):
             continue
         if candidate.date is None or other.date is None:
             return True

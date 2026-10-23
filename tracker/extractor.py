@@ -108,12 +108,33 @@ class GeminiExtractor:
 
         self._types = types
         self._client = genai.Client(api_key=api_key)
-        self._model = settings["model"]
+        # Tried in order. Free-tier quotas are per model, and one model can be overloaded while another isn't.
+        self._models = list(settings.get("models") or [settings["model"]])
         self._min_interval = settings["min_seconds_between_calls"]
         self._max_retries = settings["max_retries"]
         self._last_call = 0.0
 
     def extract(self, article: Article, text: str) -> Extraction:
+        last_error: Exception | None = None
+        for model in list(self._models):
+            try:
+                return self._extract_with(model, article, text)
+            except QuotaExhausted as e:
+                # Out for the rest of the run; later articles go straight to the next model.
+                self._models.remove(model)
+                log.warning("%s; trying the next Gemini model", e)
+                last_error = e
+            except Exception as e:
+                if getattr(e, "code", None) not in (500, 503):
+                    raise
+                # Overloaded right now: try the next model for this article, but keep this one for later.
+                log.warning("%s is unavailable (%s); trying the next Gemini model", model, getattr(e, "code", None))
+                last_error = e
+        if not self._models:
+            raise QuotaExhausted("Every Gemini model's quota is exhausted") from last_error
+        raise last_error or QuotaExhausted("No Gemini models configured")
+
+    def _extract_with(self, model: str, article: Article, text: str) -> Extraction:
         config = self._types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
@@ -127,12 +148,12 @@ class GeminiExtractor:
             self._last_call = time.monotonic()
             try:
                 resp = self._client.models.generate_content(
-                    model=self._model, contents=_prompt(article, text), config=config)
+                    model=model, contents=_prompt(article, text), config=config)
                 return resp.parsed if isinstance(resp.parsed, Extraction) else Extraction.model_validate_json(resp.text)
             except Exception as e:
                 delay = _retry_delay_seconds(e) if getattr(e, "code", None) == 429 else None
                 if delay is not None and delay > 120:
-                    raise QuotaExhausted(f"Gemini quota exhausted for {self._model}; resets in ~{delay / 3600:.1f}h") from e
+                    raise QuotaExhausted(f"Gemini quota exhausted for {model}; resets in ~{delay / 3600:.1f}h") from e
                 if attempt == self._max_retries:
                     raise
                 backoff = delay or 10 * attempt

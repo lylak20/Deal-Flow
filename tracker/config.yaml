@@ -27,7 +27,8 @@ llm:
     max_retries: 3
   gemini:
     # The free tier allows only ~20 requests/day per model: fine as a backup for one daily run.
-    model: gemini-3.8-flash
+    # Tried in order: the next model is used when one is overloaded (503) or out of daily quota.
+    models: [gemini-3.8-flash, gemini-3.6-flash]
     min_seconds_between_calls: 4
     max_retries: 3
 
