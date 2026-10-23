@@ -1,7 +1,7 @@
 """Set up (or upgrade) the Google Sheet: tabs, headers, dashboard formulas, Email buttons and template.
 
 Safe to run again: data rows are kept, a user-edited email template is kept, and a sheet created
-before the Email column existed gets that column inserted left of Company.
+before a column existed (Email, Valuation) gets that column inserted in place.
 
     python setup_sheet.py
 """
@@ -35,15 +35,18 @@ def ensure_tab(spreadsheet: gspread.Spreadsheet, title: str, cols: int) -> gspre
 def setup_raw(ss: gspread.Spreadsheet) -> None:
     raw = ensure_tab(ss, RAW, len(RAW_HEADERS))
     header = raw.row_values(1)
-    without_email = [h for h in RAW_HEADERS if h != "Email"]
-    if header == without_email:
-        # Sheet from before the Email column: insert it left of Company, keeping every data row aligned.
-        raw.insert_cols([["Email"]], col=RAW_HEADERS.index("Email") + 1, value_input_option="RAW")
-        print("Inserted the Email column left of Company")
-    elif header != RAW_HEADERS:
-        if header:
-            raise SystemExit(f"Unexpected Raw Database header {header}; fix it by hand before running setup.")
+    if not header:
         raw.update([RAW_HEADERS], "A1", value_input_option="RAW")
+    elif header != RAW_HEADERS:
+        # A sheet from before a column was added (Email, Valuation): insert each missing column where it
+        # belongs, which keeps every data row aligned. Anything else needs a human.
+        if [h for h in RAW_HEADERS if h in header] != header:
+            raise SystemExit(f"Unexpected Raw Database header {header}; fix it by hand before running setup.")
+        for i, h in enumerate(RAW_HEADERS):
+            if h not in header:
+                raw.insert_cols([[h]], col=i + 1, value_input_option="RAW")
+                header.insert(i, h)
+                print(f"Inserted the {h} column")
     raw.freeze(rows=1)
     last = len(raw.col_values(RAW_HEADERS.index("Company") + 1))
     add_email_buttons(raw, 2, last)

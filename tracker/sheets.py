@@ -1,4 +1,7 @@
-"""4. Spreadsheet Updater: the Google Sheet is the database. Raw Database is append-only."""
+"""4. Spreadsheet Updater: the Google Sheet is the database.
+
+Raw Database only grows, except that a later, more complete report of the same round replaces its row.
+"""
 
 import json
 import os
@@ -10,7 +13,7 @@ from pathlib import Path
 import gspread
 
 from collector import Article
-from normalize import EventKey, event_key
+from normalize import EventRecord, event_key
 
 RAW = "Raw Database"
 DASHBOARD = "Funding Dashboard"
@@ -20,9 +23,10 @@ EMAIL_TEMPLATE = "Email Template"
 # "Email" holds a per-row button (formula) that opens a pre-filled Gmail draft; the pipeline itself
 # produces the other columns (see main.event_rows, which leaves Email out).
 RAW_HEADERS = [
-    "Date", "Email", "Company", "Funding Round", "Amount Raised", "Lead Investor", "Other Investors",
-    "Category", "Source", "Article URL", "Date Added",
+    "Date", "Email", "Company", "Funding Round", "Amount Raised", "Valuation", "Lead Investor",
+    "Other Investors", "Category", "Source", "Article URL", "Date Added",
 ]
+DATA_HEADERS = [h for h in RAW_HEADERS if h != "Email"]
 LOG_HEADERS = ["Article URL", "Source", "Title", "Published", "Fetched At", "Status", "Attempts", "Error"]
 DASHBOARD_ROUNDS = ["Pre-Seed", "Seed", "Series A", "Series B", "Series C", "Series D", "Series E+"]
 
@@ -110,10 +114,28 @@ class SheetStore:
         self._raw = spreadsheet.worksheet(RAW)
         self._log = spreadsheet.worksheet(ARTICLE_LOG)
 
-    def existing_events(self) -> list[EventKey]:
-        d, c, rd = (RAW_HEADERS.index(h) for h in ("Date", "Company", "Funding Round"))
-        rows = self._raw.get(f"A2:{col('Funding Round')}")
-        return [event_key(r[c], r[rd], r[d]) for r in rows if len(r) > rd]
+    def existing_records(self) -> list[EventRecord]:
+        """Every round already in Raw Database, read by header name, with its sheet row."""
+        values = self._raw.get_all_values()
+        if not values:
+            return []
+        header = values[0]
+        records = []
+        for i, r in enumerate(values[1:], start=2):
+            d = dict(zip(header, r))
+            if not d.get("Company"):
+                continue
+            records.append(EventRecord(
+                event_key(d["Company"], d.get("Funding Round", ""), d.get("Date", "")),
+                {h: d.get(h, "") for h in DATA_HEADERS},
+                row=i,
+            ))
+        return records
+
+    def delete_rows(self, rows: list[int]) -> None:
+        """Delete Raw Database rows, bottom first so the other row numbers stay valid."""
+        for row in sorted(set(rows), reverse=True):
+            self._raw.delete_rows(row)
 
     def article_log(self) -> dict[str, LogEntry]:
         entries = {}
@@ -139,13 +161,13 @@ class SheetStore:
         start = _first_row(self._log.append_rows(rows, value_input_option="RAW", table_range="A1"))
         return {a.url: LogEntry(row=start + i, article=a, status="pending", attempts=0) for i, a in enumerate(articles)}
 
-    def append_events(self, rows: list[list[str]]) -> None:
-        """rows: every Raw Database column except Email, in header order."""
+    def append_events(self, rows: list[dict[str, str]]) -> None:
+        """rows: {header: value} for every Raw Database column except Email."""
         if not rows:
             return
-        i = RAW_HEADERS.index("Email")
         # Data goes in RAW so nothing is reinterpreted (dates stay text, "=..." names stay text) ...
-        resp = self._raw.append_rows([r[:i] + [""] + r[i:] for r in rows], value_input_option="RAW", table_range="A1")
+        resp = self._raw.append_rows([[r.get(h, "") for h in RAW_HEADERS] for r in rows],
+                                     value_input_option="RAW", table_range="A1")
         # ... and only the Email buttons are written as formulas.
         start = _first_row(resp)
         add_email_buttons(self._raw, start, start + len(rows) - 1)

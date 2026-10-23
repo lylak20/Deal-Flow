@@ -18,33 +18,63 @@ from dotenv import load_dotenv
 
 from collector import Article, collect
 from extractor import QuotaExhausted, make_extractor
-from normalize import EventKey, event_key, is_duplicate, normalize_amount, normalize_round, parse_date
+from normalize import (
+    EventRecord, event_key, find_match, merge_update, normalize_amount, normalize_round, parse_date,
+)
 from parser import article_text
 
 HERE = Path(__file__).parent
 log = logging.getLogger("tracker")
 
 
-def event_rows(article: Article, extraction, existing: list[EventKey], window: int, today: str):
-    """Turn Gemini output into Raw Database rows, skipping duplicates. Adds accepted keys to `existing`."""
-    rows, skipped = [], 0
+def event_rows(article: Article, extraction, existing: list[EventRecord], window: int, today: str):
+    """Fold the extracted events into `existing` (every round in the sheet plus this run's changes).
+
+    A new round becomes a new record. A later report of a round already there replaces it when it adds
+    details (e.g. the round was "Undisclosed" and is now "Seed"); otherwise it is skipped.
+    Returns (added, updated, skipped): the records added and updated, and the number skipped.
+    """
+    added, updated, skipped = [], [], 0
     for ev in extraction.events:
         if not ev.company.strip():
             continue
         round_ = normalize_round(ev.round)
         when = parse_date(ev.date) or (article.published.date() if article.published else None)
-        when_str = when.isoformat() if when else ""
+        values = {
+            "Date": when.isoformat() if when else "",
+            "Company": ev.company.strip(),
+            "Funding Round": round_,
+            "Amount Raised": normalize_amount(ev.amount),
+            "Valuation": normalize_amount(ev.valuation) if ev.valuation.strip() else "",
+            "Lead Investor": ev.lead_investor.strip(),
+            "Other Investors": ", ".join(i.strip() for i in ev.other_investors if i.strip()),
+            "Category": ev.category.strip(),
+            "Source": article.source,
+            "Article URL": article.url,
+            "Date Added": today,
+        }
         key = event_key(ev.company, round_, when)
-        if is_duplicate(key, existing, window):
+        i = find_match(key, [e.key for e in existing], window)
+        if i is None:
+            rec = EventRecord(key, values)
+            existing.append(rec)
+            added.append(rec)
+            continue
+        old = existing[i]
+        merged = merge_update(old.values, values)
+        if merged is None:
             skipped += 1
             continue
-        existing.append(key)
-        rows.append([
-            when_str, ev.company.strip(), round_, normalize_amount(ev.amount), ev.lead_investor.strip(),
-            ", ".join(i.strip() for i in ev.other_investors if i.strip()), ev.category.strip(),
-            article.source, article.url, today,
-        ])
-    return rows, skipped
+        # The sheet row (if any) is deleted and the merged round appended as today's row.
+        rec = EventRecord(event_key(merged["Company"], merged["Funding Round"], merged["Date"]), merged,
+                          replaces=old.replaces + ([old.row] if old.row else []))
+        existing[i] = rec
+        same_run = [j for j, a in enumerate(added) if a is old]
+        if same_run:
+            added[same_run[0]] = rec  # added earlier in this run: still just one new row
+        else:
+            updated.append(rec)
+    return added, updated, skipped
 
 
 def main() -> int:
@@ -86,11 +116,11 @@ def main() -> int:
         fresh = store.log_new_articles(new, now.isoformat(timespec="seconds"))
         retry = {u: e for u, e in logged.items() if e.status in ("pending", "error") and e.attempts < max_attempts}
         work = {u: (e.row, e.article, e.attempts) for u, e in {**retry, **fresh}.items()}
-        existing = store.existing_events()
+        existing = store.existing_records()
         log.info("New articles: %d, retries: %d, events already in sheet: %d", len(fresh), len(retry), len(existing))
 
-    all_rows, statuses = [], []
-    counts = {"funding": 0, "not_funding": 0, "duplicates": 0, "errors": 0, "failed": 0}
+    statuses = []
+    counts = {"funding": 0, "not_funding": 0, "added": 0, "updated": 0, "duplicates": 0, "errors": 0, "failed": 0}
     quota_error = None
     for row, article, attempts in work.values():
         try:
@@ -113,23 +143,30 @@ def main() -> int:
             statuses.append((row, "skipped_not_funding", attempts + 1, ""))
             continue
 
-        rows, skipped = event_rows(article, extraction, existing, window, today)
+        added, updated, skipped = event_rows(article, extraction, existing, window, today)
         counts["funding"] += 1
+        counts["added"] += len(added)
+        counts["updated"] += len(updated)
         counts["duplicates"] += skipped
-        all_rows.extend(rows)
         statuses.append((row, "extracted", attempts + 1, ""))
-        for r in rows:
-            log.info("+ %s | %s | %s | %s | %s", r[0], r[1], r[2], r[3], r[4])
+        for mark, recs in (("+", added), ("~", updated)):
+            for r in recs:
+                v = r.values
+                log.info("%s %s | %s | %s | %s | %s | %s", mark, v["Date"], v["Company"], v["Funding Round"],
+                         v["Amount Raised"], v["Valuation"], v["Lead Investor"])
 
     if store:
-        # Events first: if this fails, statuses stay "pending" and the next run retries (dedup prevents doubles).
-        store.append_events(all_rows)
+        # Rows first: if this fails, statuses stay "pending" and the next run retries (dedup prevents doubles).
+        # New and updated rounds are appended before the rows they replace are deleted, so nothing is lost.
+        pending = [e for e in existing if e.row is None]
+        store.append_events([e.values for e in pending])
+        store.delete_rows([r for e in pending for r in e.replaces])
         store.update_statuses(statuses)
 
     log.info(
-        "Done. processed=%d funding_articles=%d new_rows=%d duplicates=%d not_funding=%d errors=%d failed=%d",
-        len(work), counts["funding"], len(all_rows), counts["duplicates"], counts["not_funding"],
-        counts["errors"], counts["failed"],
+        "Done. processed=%d funding_articles=%d added=%d updated=%d duplicates=%d not_funding=%d errors=%d failed=%d",
+        len(work), counts["funding"], counts["added"], counts["updated"], counts["duplicates"],
+        counts["not_funding"], counts["errors"], counts["failed"],
     )
     # Fail the job (GitHub emails you) only when something needs a human: every feed down, an article
     # that has used up its retries, or a Gemini quota too small for the day's news. Transient errors are

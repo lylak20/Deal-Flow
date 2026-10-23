@@ -28,6 +28,8 @@ Field rules:
 - company: the company's name as written, without "Inc." etc.
 - round: e.g. "Pre-Seed", "Seed", "Series A", "Series B extension", "Growth". Empty if not stated.
 - amount: e.g. "$150M", "$1.2B", "€20M". Keep the original currency. Empty if undisclosed.
+- valuation: the company's valuation stated for this round (post-money if both are given), same format
+  as amount, e.g. "$8.8B". Empty if the article doesn't state one.
 - date: announcement date as YYYY-MM-DD. Empty if the article doesn't say.
 - lead_investor: the lead investor(s), comma-separated. Empty if not stated.
 - other_investors: other participating investors.
@@ -41,6 +43,7 @@ class FundingEvent(BaseModel):
     company: str
     round: str
     amount: str
+    valuation: str
     date: str
     lead_investor: str
     other_investors: list[str]

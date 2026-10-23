@@ -2,7 +2,7 @@
 
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from urllib.parse import urlsplit, urlunsplit
 
@@ -125,8 +125,9 @@ def event_key(company: str, round_: str, when: str | date | None) -> EventKey:
     return EventKey(company_key(company), round_, parse_date(when))
 
 
-def is_duplicate(candidate: EventKey, existing: list[EventKey], window_days: int) -> bool:
-    for other in existing:
+def find_match(candidate: EventKey, existing: list[EventKey], window_days: int) -> int | None:
+    """Index of the existing event that is the same funding round as `candidate`, if any."""
+    for i, other in enumerate(existing):
         if other.company != candidate.company:
             continue
         # One article may name the round while another doesn't ("Warhound raises $200M" vs "...$200M seed"):
@@ -134,7 +135,37 @@ def is_duplicate(candidate: EventKey, existing: list[EventKey], window_days: int
         if other.round != candidate.round and "Undisclosed" not in (other.round, candidate.round):
             continue
         if candidate.date is None or other.date is None:
-            return True
+            return i
         if abs((candidate.date - other.date).days) <= window_days:
-            return True
-    return False
+            return i
+    return None
+
+
+def is_duplicate(candidate: EventKey, existing: list[EventKey], window_days: int) -> bool:
+    return find_match(candidate, existing, window_days) is not None
+
+
+@dataclass
+class EventRecord:
+    """One funding round as a Raw Database row (every column except Email)."""
+    key: EventKey
+    values: dict[str, str]
+    row: int | None = None  # sheet row holding it; None until this run appends it
+    replaces: list[int] = field(default_factory=list)  # older sheet rows of the same round to delete
+
+
+_INFO_FIELDS = ("Funding Round", "Amount Raised", "Valuation", "Lead Investor", "Other Investors")
+
+
+def _known(value: str) -> bool:
+    return value not in ("", "Undisclosed")
+
+
+def merge_update(old: dict[str, str], new: dict[str, str]) -> dict[str, str] | None:
+    """A newer report of the same round as one row: newer values win, older details it lacks are kept.
+
+    None when the newer report adds nothing (e.g. a repeat mention), so the old row stays as is.
+    """
+    if not any(_known(new.get(f, "")) and not _known(old.get(f, "")) for f in _INFO_FIELDS):
+        return None
+    return {k: v if _known(v) else old.get(k, v) for k, v in new.items()}
