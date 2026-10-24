@@ -60,6 +60,16 @@ def setup_database(ss: gspread.Spreadsheet, tab: str) -> None:
                            for i, r in enumerate(values[1:], start=2)])
 
 
+def order_tabs(ss: gspread.Spreadsheet) -> None:
+    """Put each database tab followed by its dashboard first; every other tab keeps its relative order."""
+    first = [t for db in TABS.values() for t in (db, *(d for d, src in DASHBOARDS.items() if src == db))]
+    tabs = ss.worksheets()
+    by_title = {ws.title: ws for ws in tabs}
+    wanted = [by_title[t] for t in first if t in by_title] + [ws for ws in tabs if ws.title not in first]
+    if [ws.title for ws in wanted] != [ws.title for ws in tabs]:
+        ss.reorder_worksheets(wanted)
+
+
 def setup_template(ss: gspread.Spreadsheet) -> None:
     tmpl = ensure_tab(ss, EMAIL_TEMPLATE, 2)
     if not any(tmpl.col_values(2)):
@@ -98,6 +108,8 @@ def main() -> None:
     if log.row_values(1) != LOG_HEADERS:
         log.update([LOG_HEADERS], "A1", value_input_option="RAW")
     log.freeze(rows=1)
+
+    order_tabs(ss)
 
     # A new spreadsheet starts with an empty default tab; remove it once our tabs exist.
     for ws in ss.worksheets():
