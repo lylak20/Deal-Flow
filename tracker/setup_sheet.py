@@ -32,11 +32,11 @@ GREEN = {"red": 0.851, "green": 0.918, "blue": 0.827}  # #D9EAD3
 
 
 def dashboard_formula(round_name: str, tab: str) -> str:
-    # "Company (YYYY-MM-DD)" for every row of this round, newest first. Updates itself as rows are appended.
+    # The company of every row of this round, newest first. Updates itself as rows are appended.
     r = f"'{tab}'"
     date, company, round_ = (f"{r}!{col(h)}2:{col(h)}" for h in ("Date", "Company", "Funding Round"))
     return (
-        f'=IFERROR(CHOOSECOLS(SORT(FILTER({{{company} & " (" & {date} & ")", {date}}}, '
+        f'=IFERROR(CHOOSECOLS(SORT(FILTER({{{company}, {date}}}, '
         f'{round_} = "{round_name}"), 2, FALSE), 1), "")'
     )
 
