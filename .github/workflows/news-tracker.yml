@@ -24,7 +24,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: tracker
@@ -75,3 +75,15 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
+      - if: steps.when.outputs.run == 'true' && !cancelled()
+        # Runs even if the news step failed: the two write different tabs of the same sheet.
+        name: Run sourcing
+        run: python sourcing_main.py
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          # Raises GitHub's API limit and lets the run rebuild star history for new repositories.
+          GITHUB_TOKEN: ${{ github.token }}
+          # Optional: OpenAlex's own free daily budget (otherwise shared with everyone on the runner's IP).
+          OPENALEX_API_KEY: ${{ secrets.OPENALEX_API_KEY }}

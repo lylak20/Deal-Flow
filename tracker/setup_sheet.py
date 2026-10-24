@@ -1,7 +1,8 @@
 """Set up (or upgrade) the Google Sheet: tabs, headers, dashboard formulas, Email buttons, links and template.
 
-Safe to run again: data rows are kept, a user-edited email template is kept, and a database tab created
-before a column existed (Email, Valuation, Website) gets that column inserted in place.
+Safe to run again: data rows are kept, a user-edited email template is kept, a database tab created
+before a column existed (Email, Valuation) gets that column inserted in place, and retired columns
+(Source, Website) are deleted.
 
     python setup_sheet.py
 """
@@ -10,9 +11,13 @@ import gspread
 from dotenv import load_dotenv
 
 from sheets import (
-    ARTICLE_LOG, DASHBOARD_ROUNDS, DASHBOARDS, DATA_HEADERS, DEFAULT_BODY, DEFAULT_SUBJECT, EMAIL_TEMPLATE,
-    LOG_HEADERS, RAW_HEADERS, TABS, add_company_links, add_email_buttons, col, open_spreadsheet,
+    ARTICLE_LOG, DASHBOARD_ROUNDS, DASHBOARDS, DEFAULT_BODY, DEFAULT_SUBJECT, EMAIL_TEMPLATE, LOG_HEADERS,
+    RAW_HEADERS, RETIRED_HEADERS, TABS, add_email_buttons, col, open_spreadsheet,
 )
+
+# Tab colors: the funding databases and their dashboards, and the Sourcing tabs.
+YELLOW = {"red": 1.0, "green": 0.949, "blue": 0.8}     # #FFF2CC
+GREEN = {"red": 0.851, "green": 0.918, "blue": 0.827}  # #D9EAD3
 
 
 def dashboard_formula(round_name: str, tab: str) -> str:
@@ -35,10 +40,24 @@ def ensure_tab(spreadsheet: gspread.Spreadsheet, title: str, cols: int) -> gspre
 def setup_database(ss: gspread.Spreadsheet, tab: str) -> None:
     ws = ensure_tab(ss, tab, len(RAW_HEADERS))
     header = ws.row_values(1)
+    retired = [i for i, h in enumerate(header) if h in RETIRED_HEADERS]
+    if retired:
+        # Rightmost first, so the other column numbers stay valid.
+        for i in reversed(retired):
+            ws.delete_columns(i + 1)
+            print(f"{tab}: deleted the {header[i]} column")
+        header = [h for h in header if h not in RETIRED_HEADERS]
+        # Company names used to link to the company website (cell formatting); drop those links.
+        c = RAW_HEADERS.index("Company")
+        ws.spreadsheet.batch_update({"requests": [{"repeatCell": {
+            "range": {"sheetId": ws.id, "startRowIndex": 1, "startColumnIndex": c, "endColumnIndex": c + 1},
+            "cell": {"userEnteredFormat": {"textFormat": {}}},
+            "fields": "userEnteredFormat.textFormat.link",
+        }}]})
     if not header:
         ws.update([RAW_HEADERS], "A1", value_input_option="RAW")
     elif header != RAW_HEADERS:
-        # A tab from before a column was added (Email, Valuation, Website): insert each missing column where
+        # A tab from before a column was added (Email, Valuation): insert each missing column where
         # it belongs, which keeps every data row aligned. Anything else needs a human.
         if [h for h in RAW_HEADERS if h in header] != header:
             raise SystemExit(f"Unexpected {tab} header {header}; fix it by hand before running setup.")
@@ -54,10 +73,7 @@ def setup_database(ss: gspread.Spreadsheet, tab: str) -> None:
                 header.insert(i, h)
                 print(f"{tab}: inserted the {h} column")
     ws.freeze(rows=1)
-    values = ws.get_all_values()
-    add_email_buttons(ws, 2, len(values))
-    add_company_links(ws, [(i, {h: d for h, d in zip(RAW_HEADERS, r) if h in DATA_HEADERS})
-                           for i, r in enumerate(values[1:], start=2)])
+    add_email_buttons(ws, 2, len(ws.get_all_values()))
 
 
 def order_tabs(ss: gspread.Spreadsheet) -> None:
@@ -70,9 +86,30 @@ def order_tabs(ss: gspread.Spreadsheet) -> None:
         ss.reorder_worksheets(wanted)
 
 
+def style_tabs(ss: gspread.Spreadsheet) -> None:
+    """Hide the Article Log (the program's own bookkeeping) and color the tabs.
+
+    Yellow: each database and its dashboard. Green: every Sourcing tab. Email Template stays uncolored.
+    """
+    funding = {*TABS.values(), *DASHBOARDS}
+    requests = []
+    for ws in ss.worksheets():
+        props = {"sheetId": ws.id}
+        if ws.title == ARTICLE_LOG:
+            props["hidden"] = True
+            requests.append({"updateSheetProperties": {"properties": props, "fields": "hidden"}})
+        elif ws.title != EMAIL_TEMPLATE:
+            props["tabColorStyle"] = {"rgbColor": YELLOW if ws.title in funding else GREEN}
+            requests.append({"updateSheetProperties": {"properties": props, "fields": "tabColorStyle"}})
+    if requests:
+        ss.batch_update({"requests": requests})
+
+
 def setup_template(ss: gspread.Spreadsheet) -> None:
     tmpl = ensure_tab(ss, EMAIL_TEMPLATE, 2)
-    if not any(tmpl.col_values(2)):
+    body = tmpl.acell("B2").value or ""
+    # Empty, or still the first version's generic text ("[Your name]"): write the current default.
+    if not body or "[Your name]" in body:
         tmpl.update([
             ["Subject", DEFAULT_SUBJECT],
             ["Body", DEFAULT_BODY],
@@ -80,7 +117,9 @@ def setup_template(ss: gspread.Spreadsheet) -> None:
             ["Placeholders", "{Company}, {Round} (\"recent round\" if unknown), "
                              "{Amount} (\" ($66M)\" or nothing), {Lead} (\"your investors\" if unknown)"],
             ["How it works", "Click \"✉️ Email\" in Raw Database or Robotics Database: Gmail opens a draft filled "
-                             "from this template. Edit B1/B2 to change every button at once."],
+                             "from this template. Edit B1/B2 to change every button at once. Gmail draft links "
+                             "can't carry formatting, so links stay plain URLs (Gmail makes them clickable) and "
+                             "[Name] is yours to fill in."],
         ], "A1", value_input_option="RAW")
         tmpl.format("B2", {"wrapStrategy": "WRAP", "verticalAlignment": "TOP"})
         tmpl.format("A1:A5", {"textFormat": {"bold": True}, "verticalAlignment": "TOP"})
@@ -110,6 +149,7 @@ def main() -> None:
     log.freeze(rows=1)
 
     order_tabs(ss)
+    style_tabs(ss)
 
     # A new spreadsheet starts with an empty default tab; remove it once our tabs exist.
     for ws in ss.worksheets():

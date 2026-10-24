@@ -147,3 +147,85 @@ keywords:
   - '\b(secures?|closes?|lands?|nabs?|bags?)\b.{0,40}\$\s?\d'
   - '\binvests? (us)?\$'
 
+# ---------------------------------------------------------------------------------------------------
+# Sourcing (sourcing_main.py): finds emerging opportunities from free public data, scores them in code,
+# and writes them to new tabs of the same sheet. Claude is used only for the short weekly partner brief
+# and, if turned on, founding-team lookups.
+sourcing:
+  # Themes from the Deal Flow Dashboard agent. keywords classify text (case-insensitive) and drive the
+  # OpenAlex paper search; github_topics are searched for new repositories.
+  themes:
+    AI Infrastructure:
+      keywords: [inference, llm serving, model serving, gpu, vector database, distributed training, kv cache, quantization]
+      github_topics: [llm-inference, inference-engine, vector-database, llmops]
+    AI Agents:
+      keywords: [ai agent, agentic, multi-agent, tool use, autonomous agent, model context protocol]
+      github_topics: [ai-agents, agentic-ai, mcp-server]
+    AI Coding:
+      keywords: [code generation, coding agent, program synthesis, code llm, software engineering agent, code review]
+      github_topics: [coding-agent, code-generation, ai-coding]
+    Healthcare AI:
+      keywords: [clinical, medical, healthcare, drug discovery, protein design, radiology, pathology]
+      github_topics: [medical-ai, drug-discovery, bioinformatics]
+    Robotics & Physical AI:
+      keywords: [robot, humanoid, embodied, manipulation, locomotion, vision-language-action, autonomous driving]
+      github_topics: [robotics, humanoid, embodied-ai]
+    Semiconductor:
+      keywords: [semiconductor, chip design, ai accelerator, photonic, fpga, asic, neuromorphic]
+      github_topics: [fpga, chip-design, hardware-acceleration]
+    Enterprise Software:
+      keywords: [enterprise, workflow automation, erp, crm, data platform, document processing]
+      github_topics: [workflow-automation, data-platform, enterprise-ai]
+
+  research:
+    lookback_months: 12
+    papers_per_theme: 15   # per query; two queries per theme (tracked universities, company co-authors)
+    # Lab Tracker defaults from the Google Doc. Values are OpenAlex institution IDs (checked 2026-10-23).
+    institutions:
+      Stanford: I97018004
+      MIT: I63966007
+      Berkeley: I95457486
+      CMU: I74973139
+      Harvard: I136199984
+      Caltech: I122411786
+      Princeton: I20089843
+      Georgia Tech: I130701444
+
+  github:
+    lookback_months: 12    # only repositories created within this window
+    min_stars: 200
+    repos_per_topic: 10
+    # Star history for a new repo is rebuilt from GitHub once (needs GITHUB_TOKEN); bigger repos rely on
+    # the daily snapshots. Capped per run to stay inside the API rate limit.
+    bootstrap_max_stars: 3000
+    bootstrap_per_run: 10
+    # Big companies' repos and models aren't startup opportunities (GitHub and Hugging Face owner names).
+    exclude_owners: [google, google-deepmind, google-research, microsoft, meta-llama, facebookresearch, nvidia,
+                     NVIDIA, openai, anthropics, amazon-science, aws, awslabs, apple, alibaba, Qwen, QwenLM,
+                     tencent, Tencent, bytedance, ByteDance-Seed, baidu, deepseek-ai, huggingface, ibm, IBM,
+                     ibm-granite, intel, salesforce, Salesforce, mistralai, xai-org, samsung, lg-ai-research]
+
+  huggingface:
+    trending_limit: 50
+
+  startups:
+    # YC batches and funding rounds (Raw Database) within this window count as "recently formed".
+    formation_months: 24
+    early_rounds: [Pre-Seed, Seed, Series A]
+
+  scoring:
+    # Minimum total for Tier 1 / 2 / 3 (below: Tier 4 Watchlist). The Google Doc uses 90 / 75 / 60, but
+    # founder and lab-spinout data aren't in free sources: a strong startup (YC + recent round + fast-growing
+    # repo) reaches about 40-50, a strong lab about 30-35, a YC company alone about 12-16. Raise these when
+    # founding_team lookups are on.
+    tier_thresholds: [40, 28, 20]
+
+  claude:
+    model: claude-haiku-5-5
+    # Weekly Partner Brief: one short Claude call on the chosen weekday (0 = Monday), about $0.002.
+    weekly_brief: true
+    brief_weekday: 0
+    # Founding Team Tracker: web lookups for the top startups without team data. About $0.02-0.05 per
+    # company with Haiku; off by default to protect the monthly API budget.
+    founding_team: false
+    founding_team_top_n: 5

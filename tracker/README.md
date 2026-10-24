@@ -25,7 +25,7 @@ TechCrunch 기사에 로보틱스 회사가 나오면 두 탭 모두에 들어�
 |---|---|---|
 | 1 | TechCrunch(펀딩·벤처), PR Newswire(VC) | 항상 먼저 처리 |
 | 2 | TechCrunch Robotics, The Robot Report, Robotics & Automation News, Crunchbase News | 로보틱스 전문·주요 매체 |
-| 3 | Google News 검색 (로보틱스 + 펀딩, 미국, 최근 1일) | 여러 매체를 한 번에 잡는 "그물망". 링크로 본문을 열 수 없어 **제목만으로** 추출해요. Source 열에는 `매체명 (via Google News)`로 나와요 |
+| 3 | Google News 검색 (로보틱스 + 펀딩, 미국, 최근 1일) | 여러 매체를 한 번에 잡는 "그물망". 링크로 본문을 열 수 없어 **제목만으로** 추출해요. Article Log의 Source 열에는 `매체명 (via Google News)`로 나와요 |
 
 **LLM 호출을 아끼는 규칙**
 - 제목과 요약에 로보틱스 단어가 없는 기사는 LLM에 보내지 않아요(`focus.keywords`). 최종 판단은 LLM이 해요. 로보틱스가 아닌 라운드는 Article Log에 `skipped_not_in_focus`로 남아요.
@@ -86,12 +86,14 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 
 ## 시트 구성
 
+탭 색: 노란색은 펀딩 탭(Raw Database ~ Robotics Dashboard), 초록색은 Sourcing 탭(Signal Snapshots부터 오른쪽)이에요.
+
 | 탭 | 내용 |
 |---|---|
-| **Raw Database** / **Robotics Database** | 펀딩 라운드 1건이 1행이에요(두 탭 모두 같은 열). **Company**(C열)를 누르면 회사 웹사이트로 가요. 웹사이트는 기사 본문과 기사 안의 링크에서만 찾고, 찾은 주소는 **Website** 열(맨 끝)에 적어요. 웹사이트를 찾지 못하면 `회사명 + 분야 + official website` Google 검색 결과로 연결돼요. 새 라운드는 맨 아래에 추가해요. 같은 라운드의 더 자세한 소식이 나오면 기존 행을 지우고 최신 내용으로 다시 써요(아래 중복 규칙 참고). **Valuation**(밸류에이션)은 기사에 나와 있을 때만 채워요. B열 **✉️ Email**을 누르면 그 회사에 맞게 채워진 Gmail 초안이 열려요. 받는 사람은 비어 있어요. |
-| **Email Template** | Email 버튼이 쓰는 제목(B1)과 본문(B2)이에요. 여기만 고치면 모든 버튼에 반영돼요. 쓸 수 있는 자리표시자는 `{Company}` `{Round}` `{Amount}` `{Lead}`예요. 처음에는 본문 끝의 `[Your name]`을 바꿔 주세요. |
+| **Raw Database** / **Robotics Database** | 펀딩 라운드 1건이 1행이에요(두 탭 모두 같은 열, A~K열). 기사 출처는 **Article URL**로 확인해요. 새 라운드는 맨 아래에 추가해요. 같은 라운드의 더 자세한 소식이 나오면 기존 행을 지우고 최신 내용으로 다시 써요(아래 중복 규칙 참고). **Valuation**(밸류에이션)은 기사에 나와 있을 때만 채워요. B열 **✉️ Email**을 누르면 그 회사에 맞게 채워진 Gmail 초안이 열려요. 받는 사람은 비어 있어요. |
+| **Email Template** | Email 버튼이 쓰는 제목(B1)과 본문(B2)이에요. 기본 본문은 LG Technology Ventures 소개와 라운드 참여 문의예요. 여기만 고치면 모든 버튼에 반영돼요. 쓸 수 있는 자리표시자는 `{Company}` `{Round}` `{Amount}` `{Lead}`예요. Gmail 초안 링크에는 서식을 넣을 수 없어서 하이퍼링크는 URL 그대로 들어가요(Gmail이 클릭 가능한 링크로 바꿔 줘요). 초안이 열리면 `[Name]`에 받는 사람 이름을 넣어 주세요. |
 | **Funding Dashboard** / **Robotics Dashboard** | 각 데이터베이스 탭의 라운드별 열에 `회사명 (날짜)`가 최신순으로 나와요. 수식으로 자동 생성돼서 프로그램이 건드리지 않아요. |
-| **Article Log** | 처리한 기사 기록이에요. Status는 `pending` → `extracted` / `skipped_not_funding` / `error` 순서로 바뀌고, 3번 실패하면 `failed`가 돼요. |
+| **Article Log** (숨김) | 처리한 기사 기록이에요. 같은 기사를 LLM에 두 번 보내지 않게 하고, 다음 실행으로 넘긴 기사와 재시도를 관리해요. 지우면 안 돼요. 보기 → 숨겨진 시트에서 다시 볼 수 있어요. Status는 `pending` → `extracted` / `skipped_not_funding` / `error` 순서로 바뀌고, 3번 실패하면 `failed`가 돼요. |
 
 - **중복 규칙:** 같은 회사(이름 표기 차이는 무시)의 같은 라운드가 **1년(365일)** 안에 이미 있으면 같은 라운드로 봐요. 한쪽 라운드가 `Undisclosed`인 경우도 같은 라운드로 봐요.
   - 새 소식에 기존 행에 없던 정보(라운드 이름, 금액, 밸류에이션, 투자자)가 있으면 기존 행을 **지우고** 최신 내용으로 맨 아래에 다시 써요. 새 소식에 없는 정보는 기존 행에서 가져와요. 예: 어제 `Warhound | Undisclosed | $200M` → 오늘 `Warhound | Seed | $200M` 한 행만 남아요.
@@ -105,3 +107,55 @@ copy .env.example .env      # 그다음 .env에 키와 SHEET_ID를 채워요
 - 소스 추가/끄기: `sources`에 항목을 추가하거나 `enabled: false`로 설정해요. VentureBeat는 봇 차단(HTTP 429) 때문에 현재 꺼져 있어요.
 - 모델: `llm.provider`로 Claude와 Gemini 중에 고르고, `llm.claude.model` / `llm.gemini.model`로 모델을 정해요.
 - 키워드, 조회 기간, 중복 판단 기간도 여기서 바꿔요.
+
+---
+
+# Sourcing (유망 기회 발굴)
+
+Google Docs "AI 기반 스타트업 분석 에이전트 만들기"의 **Sourcing** 블록이에요. 뉴스 수집이 끝난 뒤 같은 GitHub Actions 실행에서 매일 돌고, 결과를 같은 시트의 새 탭에 써요.
+수집과 점수 계산은 **무료 공개 데이터와 코드**로 해요. Claude(Haiku)는 월요일 **주간 파트너 브리프** 한 번(약 $0.002)에만 쓰고, 창업팀 조회는 꺼져 있어요.
+
+```
+sourcing_main.py
+ ├─ research.py    Research Scout + Lab Tracker      ← OpenAlex (논문, 인용, 소속, 연구비)
+ ├─ opensource.py  Open Source Momentum Tracker      ← GitHub 검색, Hugging Face 트렌딩
+ ├─ startups.py    Startup Formation Tracker         ← YC 디렉터리, 이 시트의 Raw Database
+ ├─ claude.py      Founding Team Tracker (꺼짐), 주간 브리프
+ ├─ scoring.py     Opportunity Scoring Engine        (Research/Lab/Momentum/Team/Formation 각 0~20점)
+ └─ store.py       Deal Flow Dashboard + 시트 탭
+```
+
+## 처음 한 번
+- 추가로 할 일은 없어요. 시트 탭은 첫 실행 때 자동으로 만들어져요.
+- **권장:** https://openalex.org/settings/api 에서 무료 키를 받아 GitHub Secrets에 `OPENALEX_API_KEY`로 넣어요. 키가 없으면 GitHub 서버를 같이 쓰는 모든 사람과 하루 $0.10어치 무료 한도를 나눠 써서, 가끔 논문 수집이 실패할 수 있어요(실패해도 나머지는 정상 실행돼요).
+
+## 실행
+```powershell
+.venv\Scripts\python sourcing_main.py --no-write   # 수집 + 점수만, 상위 25개 출력 (시트·Claude 안 씀, 무료)
+.venv\Scripts\python sourcing_main.py              # 시트에 쓰기
+```
+로컬에서 GitHub 토큰 없이 돌리면 GitHub 검색 제한(분당 10회) 때문에 2~3분 걸려요.
+
+## 시트 탭
+| 탭 | 내용 |
+|---|---|
+| **Sourcing Dashboard** | 전체 개수, 이번 주 신규, 티어별 개수, 테마별 개수·평균 점수·추세, 상위 20개, 종류별 상위 5개, Action Queue, 최신 주간 브리프 |
+| **Opportunities** | 모든 기회의 순위표. 점수 5개, 근거 신호(Key Signals), 추천 행동, 담당(Associate/Principal/Partner), 처음 발견한 날 |
+| **Research Scout** | 추적 대학(Stanford, MIT 등 8곳) 또는 기업 공저자가 있는 최근 12개월 논문. 🔥 = 2개 이상 조건 충족 |
+| **Lab Tracker** | 논문의 마지막 저자(PI) 기준 연구실. 🔥 = 3개 이상 조건 충족 |
+| **Open Source Momentum** | 최근 12개월 내 만들어진 GitHub 저장소와 Hugging Face 트렌딩 모델. 성장 가속도(Acceleration) 포함 |
+| **Startup Formation** | 최근 24개월 YC 배치와 Raw Database의 Pre-Seed/Seed/Series A 회사 |
+| **Signal Snapshots** | 매일 별 수·테마별 개수 기록(추가만 함). 가속도와 테마 추세 계산에 써요. 지우면 기록이 처음부터 다시 쌓여요 |
+| **Partner Brief** | 월요일마다 Claude가 쓴 주간 브리프(추가만 함). 입력에 없는 숫자가 나온 줄에는 [확인 필요]가 붙어요 |
+
+## 점수 읽는 법
+- **Total = Research + Lab + Momentum + Team + Formation** (각 0~20, 문서와 같은 구조). 점수마다 Key Signals에 근거가 적혀 있어요.
+- **Acceleration (0~100):** 연속된 세 기간의 성장량을 비교해요. 100 → 300 → 900이면 97(Explosive), 1000 → 700 → 300이면 24(Decelerating). 스냅샷이 3주 쌓이면 7일 단위, 90일 쌓이면 30일 단위로 계산해요. GitHub Actions에서는 별 3,000개 이하 저장소의 과거 별 기록을 하루 10개씩 바로 불러와요.
+- **티어 기준은 [40, 28, 20]이에요** (`sourcing.scoring.tier_thresholds`). 문서의 90/75/60은 창업자·스핀아웃 정보가 있어야 닿는 점수라, 무료 데이터만으로는 아무것도 Tier 1이 될 수 없어요.
+- 첫 실행 날은 모든 기회가 "New This Week"로 나와요. 다음 날부터 정상이에요.
+
+## 아직 안 되는 것
+- **특허(USPTO), 졸업생 창업 이력, 기여자 수 증가**: 무료로 안정적으로 얻을 수 없어서 넣지 않았어요.
+- **Founding Team Tracker**: `sourcing.claude.founding_team: true`로 켜면 상위 스타트업 5곳의 창업자를 Claude Haiku가 웹에서 찾아요(회사당 약 $0.02~0.05). 가져온 페이지에 이름과 인용문이 실제로 있는 창업자만 남겨요.
+- 테마는 키워드로 나눠서, 가끔 엉뚱한 테마가 붙어요. `config.yaml`의 `sourcing.themes` 키워드를 고치면 바로 반영돼요.
+- 대기업(google, nvidia, alibaba 등) 저장소와 모델은 `sourcing.github.exclude_owners`로 빼요.

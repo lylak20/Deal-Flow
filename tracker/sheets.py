@@ -9,7 +9,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote_plus
 
 import gspread
 
@@ -32,21 +31,29 @@ EMAIL_TEMPLATE = "Email Template"
 # produces the other columns (see main.event_rows, which leaves Email out).
 RAW_HEADERS = [
     "Date", "Email", "Company", "Funding Round", "Amount Raised", "Valuation", "Lead Investor",
-    "Other Investors", "Category", "Source", "Article URL", "Date Added", "Website",
+    "Other Investors", "Category", "Article URL", "Date Added",
 ]
+# Columns earlier versions had; setup_sheet.py deletes them from existing tabs.
+RETIRED_HEADERS = ["Source", "Website"]
 DATA_HEADERS = [h for h in RAW_HEADERS if h != "Email"]
 LOG_HEADERS = ["Article URL", "Source", "Title", "Published", "Fetched At", "Status", "Attempts", "Error"]
 DASHBOARD_ROUNDS = ["Pre-Seed", "Seed", "Series A", "Series B", "Series C", "Series D", "Series E+"]
 
 DEFAULT_SUBJECT = "Congrats on the {Round}, {Company}"
-DEFAULT_BODY = """Hi {Company} team,
+DEFAULT_BODY = """Hi [Name],
 
-Congratulations on your {Round}{Amount}! I saw the news and would love to learn more about what you're building.
+Congratulations on your new fundraise!
 
-Would you be open to a quick intro call in the next couple of weeks?
+I’m Lyla from LG Technology Ventures (https://www.lgtechventures.com/), LG’s Silicon Valley-based corporate venture capital arm managing $1B+ in capital. I’d been hoping to connect through an introduction, and today’s announcement felt like a good opportunity to reach out directly.
 
-Best,
-[Your name]"""
+Is there any allocation still available in the round? We would welcome the opportunity to explore participating and can move very quickly.
+
+Beyond capital, we could facilitate introductions to relevant teams across LG—including LG AI Research, which develops proprietary AI models, as well as our data center and telecom businesses—to explore potential commercial and technical partnerships.
+
+If there’s still room, I’d appreciate the chance for a brief call.
+
+Thank you,
+Lyla"""
 
 
 def col(header: str) -> str:
@@ -109,23 +116,6 @@ def add_email_buttons(ws: gspread.Worksheet, first_row: int, last_row: int) -> N
     if last_row >= first_row:
         ws.update([[email_formula()]] * (last_row - first_row + 1),
                   f"{EMAIL_COL}{first_row}:{EMAIL_COL}{last_row}", value_input_option="USER_ENTERED")
-
-
-def company_link(values: dict[str, str]) -> str:
-    """The company's website when the article gave one, else a web search for it (one click to pick the site)."""
-    if values.get("Website"):
-        return values["Website"]
-    query = f'{values.get("Company", "")} {values.get("Category", "")} official website'.strip()
-    return "https://www.google.com/search?q=" + quote_plus(query)
-
-
-def add_company_links(ws: gspread.Worksheet, rows: list[tuple[int, dict[str, str]]]) -> None:
-    """Make each Company cell a link (cell formatting, so the value stays the plain company name)."""
-    c = col("Company")
-    formats = [{"range": f"{c}{row}", "format": {"textFormat": {"link": {"uri": company_link(values)}}}}
-               for row, values in rows if values.get("Company")]
-    if formats:
-        ws.batch_format(formats)
 
 
 def _first_row(append_response: dict) -> int:
@@ -194,10 +184,9 @@ class SheetStore:
         # Data goes in RAW so nothing is reinterpreted (dates stay text, "=..." names stay text) ...
         resp = ws.append_rows([[r.get(h, "") for h in RAW_HEADERS] for r in rows],
                               value_input_option="RAW", table_range="A1")
-        # ... and only the Email buttons are formulas; Company links are cell formatting.
+        # ... and only the Email buttons are formulas.
         start = _first_row(resp)
         add_email_buttons(ws, start, start + len(rows) - 1)
-        add_company_links(ws, [(start + i, r) for i, r in enumerate(rows)])
 
     def update_statuses(self, updates: list[tuple[int, str, int, str]]) -> None:
         """updates: (row, status, attempts, error)."""

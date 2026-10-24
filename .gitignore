@@ -3,3 +3,18 @@ tracker/.env
 tracker/service-account*.json
 __pycache__/
 .pytest_cache/
+ic-builder/.venv/
+ic-builder/.env
+# IC materials are confidential and this repo is public: never commit decks or source files.
+ic-builder/**/*.pptx
+ic-builder/**/*.pdf
+ic-builder/uploads/
+ic-builder/outputs/
+analyst/.venv/
+analyst/.env
+# Pitch decks are confidential: never commit them.
+analyst/**/*.pptx
+analyst/**/*.pdf
+# Company financials are confidential: never commit them.
+analyst/**/*.xlsx
+analyst/**/*.xlsm
