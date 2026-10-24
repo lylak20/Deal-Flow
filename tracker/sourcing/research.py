@@ -1,6 +1,6 @@
 """Research Scout (promising papers) and Lab Tracker (the labs behind them), from OpenAlex.
 
-Each theme is searched twice: papers with an author at a tracked university, and papers with an author at a
+Each theme in sourcing.research.themes is searched twice: papers with an author at a tracked university, and papers with an author at a
 company (an industry partnership signal). PI = the last author at a tracked university, by convention.
 """
 
@@ -126,11 +126,15 @@ def papers(http: Http, config: dict, themes: dict, today: date) -> list[Paper]:
     rc = config["research"]
     tracked_ids = {v: k for k, v in rc["institutions"].items()}
     since = months_ago(today, rc["lookback_months"]).isoformat()
+    # Only the themes the research search is set to cover (all when unset); papers are tagged with these only.
+    themes = {t: spec for t, spec in themes.items() if t in rc.get("themes", themes)}
     patterns = compile_themes(themes)
     found: dict[str, Paper] = {}
     for theme, spec in themes.items():
         terms = "|".join(k.replace(",", " ") for k in spec["keywords"])
         base = [f"title_and_abstract.search:{terms}", f"from_publication_date:{since}", "type:article|preprint"]
+        if rc.get("fields"):
+            base.append("primary_topic.field.id:" + "|".join(str(f) for f in rc["fields"]))
         for scope in (f"authorships.institutions.lineage:{'|'.join(tracked_ids)}",
                       "authorships.institutions.type:company"):
             data = http.get_json(OPENALEX, params=_params(base + [scope], rc["papers_per_theme"]))

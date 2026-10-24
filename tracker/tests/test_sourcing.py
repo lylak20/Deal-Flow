@@ -132,6 +132,22 @@ def test_research_keeps_real_research_and_finds_the_lab(collected):
     assert [(l.name, len(l.papers)) for l in labs] == [("Prof Kim lab (Stanford)", 2)]
 
 
+def test_research_searches_only_its_configured_themes():
+    http = FakeHttp()
+    papers = research.papers(http, {**CONFIG, "research": {**CONFIG["research"], "themes": ["Robotics & Physical AI"]}},
+                             THEMES, TODAY)
+    # One theme: two OpenAlex searches (tracked universities, company co-authors), not two per theme.
+    assert len([u for u, _ in http.calls if "openalex" in u]) == 2
+    assert {t for p in papers for t in p.themes} == {"Robotics & Physical AI"}
+    # "robotics" counts too (the keyword "robot" alone only matched "robot"/"robots").
+    assert scoring_theme("Acme builds robotics software") == ["Robotics & Physical AI"]
+
+
+def scoring_theme(text):
+    from sourcing.common import compile_themes, themes_of
+    return themes_of(text, compile_themes({"Robotics & Physical AI": THEMES["Robotics & Physical AI"]}))
+
+
 def test_open_source_skips_big_companies_and_flags(collected):
     _, _, _, projects, _ = collected
     assert [p.id for p in projects] == ["acme/robo-sim", "solo/tiny-agent"]

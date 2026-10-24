@@ -168,7 +168,12 @@ sourcing:
       keywords: [clinical, medical, healthcare, drug discovery, protein design, radiology, pathology]
       github_topics: [medical-ai, drug-discovery, bioinformatics]
     Robotics & Physical AI:
-      keywords: [robot, humanoid, embodied, manipulation, locomotion, vision-language-action, autonomous driving]
+      # Same scope as the Robotics Database focus: robots, humanoids, drones, autonomous vehicles,
+      # manufacturing and logistics automation, robot parts and software.
+      keywords: [robot, robotic, robotics, humanoid, embodied, physical ai, manipulation, locomotion, legged,
+                 dexterous, vision-language-action, robot learning, sim-to-real, drone, uav, quadrotor,
+                 autonomous driving, autonomous vehicle, self-driving, warehouse automation,
+                 industrial automation, exoskeleton]
       github_topics: [robotics, humanoid, embodied-ai]
     Semiconductor:
       keywords: [semiconductor, chip design, ai accelerator, photonic, fpga, asic, neuromorphic]
@@ -179,7 +184,12 @@ sourcing:
 
   research:
     lookback_months: 12
-    papers_per_theme: 15   # per query; two queries per theme (tracked universities, company co-authors)
+    # Research Scout and Lab Tracker cover only these themes (leave out to search every theme above).
+    themes: [Robotics & Physical AI]
+    papers_per_theme: 200  # per query (OpenAlex max); two queries per theme (tracked universities, company co-authors)
+    # OpenAlex fields a paper's main topic must be in: 17 Computer Science, 22 Engineering. Keeps out e.g.
+    # neuroscience "locomotion" or chemistry "self-driving laboratory" papers. Leave out for every field.
+    fields: [17, 22]
     # Lab Tracker defaults from the Google Doc. Values are OpenAlex institution IDs (checked 2026-10-23).
     institutions:
       Stanford: I97018004

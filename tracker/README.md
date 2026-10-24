@@ -141,8 +141,8 @@ sourcing_main.py
 |---|---|
 | **Sourcing Dashboard** | 전체 개수, 이번 주 신규, 티어별 개수, 테마별 개수·평균 점수·추세, 상위 20개, 종류별 상위 5개, Action Queue, 최신 주간 브리프 |
 | **Opportunities** | 모든 기회의 순위표. 점수 5개, 근거 신호(Key Signals), 추천 행동, 담당(Associate/Principal/Partner), 처음 발견한 날 |
-| **Research Scout** | 추적 대학(Stanford, MIT 등 8곳) 또는 기업 공저자가 있는 최근 12개월 논문. 🔥 = 2개 이상 조건 충족 |
-| **Lab Tracker** | 논문의 마지막 저자(PI) 기준 연구실. 🔥 = 3개 이상 조건 충족 |
+| **Research Scout** | **로보틱스 논문만**(`sourcing.research.themes`). 추적 대학(Stanford, MIT 등 8곳) 또는 기업 공저자가 있는 최근 12개월 논문을 검색마다 인용 많은 순으로 50개까지 봐요. 🔥 = 2개 이상 조건 충족 |
+| **Lab Tracker** | 위 로보틱스 논문의 마지막 저자(PI) 기준 연구실. 🔥 = 3개 이상 조건 충족 |
 | **Open Source Momentum** | 최근 12개월 내 만들어진 GitHub 저장소와 Hugging Face 트렌딩 모델. 성장 가속도(Acceleration) 포함 |
 | **Startup Formation** | 최근 24개월 YC 배치와 Raw Database의 Pre-Seed/Seed/Series A 회사 |
 | **Signal Snapshots** | 매일 별 수·테마별 개수 기록(추가만 함). 가속도와 테마 추세 계산에 써요. 지우면 기록이 처음부터 다시 쌓여요 |
