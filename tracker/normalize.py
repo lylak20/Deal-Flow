@@ -114,6 +114,30 @@ def normalize_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower() or "https", parts.netloc.lower(), path, "", ""))
 
 
+# Domains that are never a startup's own website: news sites, wires, data providers, social networks.
+NOT_COMPANY_SITES = {
+    "techcrunch.com", "prnewswire.com", "crunchbase.com", "therobotreport.com", "roboticsandautomationnews.com",
+    "businesswire.com", "globenewswire.com", "cision.com", "news.google.com", "google.com", "bloomberg.com",
+    "reuters.com", "wsj.com", "nytimes.com", "forbes.com", "axios.com", "venturebeat.com", "theinformation.com",
+    "linkedin.com", "twitter.com", "x.com", "facebook.com", "instagram.com", "youtube.com", "tiktok.com",
+    "medium.com", "substack.com", "wikipedia.org", "github.com", "apple.com", "pitchbook.com", "eventbrite.com",
+    "wordpress.com", "wp.com", "gravatar.com", "doubleclick.net", "googletagmanager.com", "cloudfront.net",
+}
+
+
+def site_domain(url: str) -> str:
+    host = urlsplit(url if "://" in url else f"https://{url}").netloc.lower().split(":")[0]
+    return host.removeprefix("www.")
+
+
+def company_website(url: str | None) -> str:
+    """'https://www.formic.co/about?x=1' -> 'https://formic.co'; '' for news/social/blank or malformed URLs."""
+    domain = site_domain((url or "").strip())
+    if "." not in domain or any(domain == d or domain.endswith("." + d) for d in NOT_COMPANY_SITES):
+        return ""
+    return f"https://{domain}"
+
+
 @dataclass(frozen=True)
 class EventKey:
     company: str

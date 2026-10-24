@@ -2,18 +2,29 @@
 
 Safe to run again: data rows are kept, a user-edited email template is kept, a database tab created
 before a column existed (Email, Valuation) gets that column inserted in place, and retired columns
-(Source, Website) are deleted.
+(Source, Website) are deleted. A Company cell without a website link gets one found in its article
+(a site the article links to that is named after the company), else a web search for it.
 
     python setup_sheet.py
 """
 
+from pathlib import Path
+
 import gspread
+import requests
+import yaml
 from dotenv import load_dotenv
 
+from main import website_by_name
+from normalize import company_website, site_domain
+from parser import outbound_sites
 from sheets import (
     ARTICLE_LOG, DASHBOARD_ROUNDS, DASHBOARDS, DEFAULT_BODY, DEFAULT_SUBJECT, EMAIL_TEMPLATE, LOG_HEADERS,
-    RAW_HEADERS, RETIRED_HEADERS, TABS, add_email_buttons, col, open_spreadsheet,
+    RAW_HEADERS, RETIRED_HEADERS, TABS, add_company_links, add_email_buttons, col, company_websites,
+    open_spreadsheet,
 )
+
+HTTP = yaml.safe_load((Path(__file__).parent / "config.yaml").read_text(encoding="utf-8"))["http"]
 
 # Tab colors: the funding databases and their dashboards, and the Sourcing tabs.
 YELLOW = {"red": 1.0, "green": 0.949, "blue": 0.8}     # #FFF2CC
@@ -37,23 +48,33 @@ def ensure_tab(spreadsheet: gspread.Spreadsheet, title: str, cols: int) -> gspre
         return spreadsheet.add_worksheet(title=title, rows=1000, cols=cols)
 
 
+def website_from_article(company: str, url: str) -> str:
+    """A site the article links to that is named after the company, or "" (Google News links can't be read)."""
+    if not url or site_domain(url) == "news.google.com":
+        return ""
+    try:
+        resp = requests.get(url, headers={"User-Agent": HTTP["user_agent"]}, timeout=HTTP["timeout_seconds"])
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"  could not read {url} ({e})")
+        return ""
+    return website_by_name(company, outbound_sites(resp.text, url))
+
+
 def setup_database(ss: gspread.Spreadsheet, tab: str) -> None:
     ws = ensure_tab(ss, tab, len(RAW_HEADERS))
     header = ws.row_values(1)
+    old_sites = []
     retired = [i for i, h in enumerate(header) if h in RETIRED_HEADERS]
     if retired:
+        if "Website" in header:
+            # Its addresses live on as the Company links below.
+            old_sites = [company_website(u) for u in ws.col_values(header.index("Website") + 1)[1:]]
         # Rightmost first, so the other column numbers stay valid.
         for i in reversed(retired):
             ws.delete_columns(i + 1)
             print(f"{tab}: deleted the {header[i]} column")
         header = [h for h in header if h not in RETIRED_HEADERS]
-        # Company names used to link to the company website (cell formatting); drop those links.
-        c = RAW_HEADERS.index("Company")
-        ws.spreadsheet.batch_update({"requests": [{"repeatCell": {
-            "range": {"sheetId": ws.id, "startRowIndex": 1, "startColumnIndex": c, "endColumnIndex": c + 1},
-            "cell": {"userEnteredFormat": {"textFormat": {}}},
-            "fields": "userEnteredFormat.textFormat.link",
-        }}]})
     if not header:
         ws.update([RAW_HEADERS], "A1", value_input_option="RAW")
     elif header != RAW_HEADERS:
@@ -73,7 +94,19 @@ def setup_database(ss: gspread.Spreadsheet, tab: str) -> None:
                 header.insert(i, h)
                 print(f"{tab}: inserted the {h} column")
     ws.freeze(rows=1)
-    add_email_buttons(ws, 2, len(ws.get_all_values()))
+    values = ws.get_all_values()
+    add_email_buttons(ws, 2, len(values))
+
+    linked = company_websites(ws)
+    rows = []
+    for i, r in enumerate(values[1:]):
+        d = dict(zip(RAW_HEADERS, r))
+        site = (linked[i] if i < len(linked) else "") or (old_sites[i] if i < len(old_sites) else "")
+        if not site and d.get("Company"):
+            site = website_from_article(d["Company"], d.get("Article URL", ""))
+            print(f"{tab}: {d['Company']} -> {site or 'web search'}")
+        rows.append((i + 2, {**d, "Website": site}))
+    add_company_links(ws, rows)
 
 
 def order_tabs(ss: gspread.Spreadsheet) -> None:

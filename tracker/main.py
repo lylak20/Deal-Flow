@@ -19,7 +19,8 @@ from dotenv import load_dotenv
 from collector import Article, collect, guess_company, is_headline_only
 from extractor import QuotaExhausted, make_extractor
 from normalize import (
-    EventRecord, company_key, event_key, find_match, merge_update, normalize_amount, normalize_round, parse_date,
+    EventRecord, company_key, company_website, event_key, find_match, merge_update, normalize_amount,
+    normalize_round, parse_date, site_domain,
 )
 from parser import article_text
 
@@ -51,6 +52,8 @@ def event_rows(article: Article, extraction, existing: list[EventRecord], window
             "Category": ev.category.strip(),
             "Article URL": article.url,
             "Date Added": today,
+            # Not a column: setup and append turn it into the Company cell's link.
+            "Website": company_website(ev.website),
         }
         key = event_key(ev.company, round_, when)
         i = find_match(key, [e.key for e in existing], window)
@@ -97,6 +100,37 @@ def source_tracks(config: dict, source: str) -> tuple[str, ...]:
     """Tracks an article from this source can feed (for retries rebuilt from the Article Log)."""
     tracks = {t for s in _sources_named(config, source) for t in s.get("tracks", TRACKS)}
     return tuple(t for t in TRACKS if t in tracks) or TRACKS
+
+
+def website_by_name(company: str, sites: list[str]) -> str:
+    """The linked site whose domain contains the company's name ("Formic" -> https://formic.co), if exactly one."""
+    key = company_key(company)
+    if len(key) < 3:
+        return ""
+
+    def named(site: str) -> bool:
+        label = site_domain(site).replace("-", "").split(".")[0]
+        # "formic" in "formicrobotics", or a shortened domain: "slingshot" for "Slingshot Insurance".
+        return key in label or (len(label) >= 5 and key.startswith(label))
+
+    matches = [s for s in sites if named(s)]
+    return matches[0] if len(matches) == 1 else ""
+
+
+def linked_sites(text: str) -> list[str]:
+    _, _, links = text.partition("\n\nLinks in the article:\n")
+    return [line.strip() for line in links.splitlines() if line.strip()]
+
+
+def verified_website(ev, text: str) -> str:
+    """The extracted website, but only if its domain really appears in the article sent to the LLM.
+
+    If the LLM gave none, a linked site named after the company is used instead.
+    """
+    site = company_website(ev.website)
+    if site and site_domain(site) in text.lower():
+        return site
+    return website_by_name(ev.company, linked_sites(text))
 
 
 def run_extraction(work: list[tuple], extractor, existing: dict[str, list[EventRecord]], config: dict,
@@ -175,7 +209,7 @@ def run_extraction(work: list[tuple], extractor, existing: dict[str, list[EventR
         covered.update(company_key(ev.company) for ev in extraction.events)
         if guess:
             covered.add(guess)
-        events = extraction.events
+        events = [ev.model_copy(update={"website": verified_website(ev, text)}) for ev in extraction.events]
         routed = {
             "all": events if "all" in article.tracks else [],
             "robotics": [ev for ev in events if ev.in_focus],
@@ -198,8 +232,8 @@ def run_extraction(work: list[tuple], extractor, existing: dict[str, list[EventR
             for mark, recs in (("+", added), ("~", updated)):
                 for r in recs:
                     v = r.values
-                    log.info("%s [%s] %s | %s | %s | %s | %s", mark, track, v["Date"], v["Company"],
-                             v["Funding Round"], v["Amount Raised"], v["Category"])
+                    log.info("%s [%s] %s | %s | %s | %s | %s | %s", mark, track, v["Date"], v["Company"],
+                             v["Funding Round"], v["Amount Raised"], v["Category"], v["Website"] or "-")
     return statuses, counts, quota_error
 
 

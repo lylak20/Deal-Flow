@@ -40,9 +40,10 @@ def art(title, source="TechCrunch", priority=1, headline_only=False, hours_ago=1
                    NOW - timedelta(hours=hours_ago), priority, headline_only)
 
 
-def ev(company, in_focus=True, round_="Seed", amount="$10M", category="Industrial Automation"):
+def ev(company, in_focus=True, round_="Seed", amount="$10M", category="Industrial Automation", website=""):
     return FundingEvent(company=company, round=round_, amount=amount, valuation="", date="2026-10-23",
-                        lead_investor="", other_investors=[], category=category, in_focus=in_focus)
+                        lead_investor="", other_investors=[], category=category, website=website,
+                        in_focus=in_focus)
 
 
 class FakeExtractor:
@@ -178,7 +179,7 @@ def test_system_instruction_carries_the_focus_definition():
     assert "Focus sector" not in system_instruction(None)
 
 
-# --- Two database tabs -------------------------------------------------------------------------------------
+# --- Two database tabs and company websites -------------------------------------------------------------
 
 def test_collect_tags_each_article_with_the_tracks_it_qualifies_for(monkeypatch):
     import collector
@@ -216,3 +217,53 @@ def test_source_tracks_for_retries():
     assert main.source_tracks(config, "Crunchbase News") == ("all", "robotics")
     assert main.source_tracks(config, "Axios (via Google News)") == ("robotics",)
     assert main.source_tracks(config, "Unknown") == ("all", "robotics")
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.formic.co/about?x=1", "https://formic.co"),
+    ("formic.co", "https://formic.co"),
+    ("https://www.linkedin.com/company/formic", ""),
+    ("https://techcrunch.com/2026/10/23/x", ""),
+    ("", ""),
+    ("not a url", ""),
+])
+def test_company_website(url, expected):
+    from normalize import company_website
+    assert company_website(url) == expected
+
+
+def test_website_is_kept_only_if_the_article_mentions_it():
+    text = "Formic raises $50M ...\n\nLinks in the article:\nhttps://formic.co\nhttps://a16z.com"
+    assert main.verified_website(ev("Formic", website="https://www.formic.co/"), text) == "https://formic.co"
+    # An invented domain the article never contained is dropped (here the real linked site replaces it).
+    assert main.verified_website(ev("Formic", website="https://formic-robots.ai"), text) == "https://formic.co"
+    assert main.verified_website(ev("Formic", website="https://formic-robots.ai"), "Formic raises $50M") == ""
+
+
+def test_outbound_sites_skip_news_social_and_the_outlet_itself():
+    from parser import outbound_sites
+    html = """<html><body><article><h1>Formic raises $50M</h1>
+      <p>Chicago-based <a href="https://formic.co/">Formic</a> raised $50M led by
+      <a href="https://www.a16z.com/portfolio">a16z</a>, per <a href="https://techcrunch.com/x">TechCrunch</a>.
+      Follow on <a href="https://twitter.com/formic">X</a>. More at <a href="https://www.therobotreport.com/y">here</a>.
+      The company has grown quickly over the past year and now runs robots in dozens of factories across the US.</p>
+    </article></body></html>"""
+    assert outbound_sites(html, "https://www.therobotreport.com/formic") == ["https://formic.co", "https://a16z.com"]
+
+
+def test_company_link_falls_back_to_a_search():
+    from sheets import company_link
+    assert company_link({"Company": "Formic", "Website": "https://formic.co"}) == "https://formic.co"
+    assert company_link({"Company": "Enact Intelligence", "Category": "Robot Components & Software",
+                         "Website": ""}) == ("https://www.google.com/search?q=Enact+Intelligence+Robot+Components"
+                                             "+%26+Software+official+website")
+
+
+def test_website_falls_back_to_a_linked_site_named_after_the_company():
+    text = "Formic raises $50M\n\nLinks in the article:\nhttps://a16z.com\nhttps://formic.co"
+    assert main.verified_website(ev("Formic", website=""), text) == "https://formic.co"
+    assert main.verified_website(ev("Dream Labs", website=""), "...\n\nLinks in the article:\nhttps://dreamlabs.ai") \
+        == "https://dreamlabs.ai"
+    # No link named after the company (or no links at all): leave it empty rather than guess.
+    assert main.verified_website(ev("Kodama", website=""), text) == ""
+    assert main.verified_website(ev("Formic", website=""), "Formic raises $50M") == ""

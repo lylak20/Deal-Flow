@@ -42,7 +42,7 @@ def test_parse_feed_and_filter():
 
 def _event(**kw):
     base = dict(company="Eka Robotics", round="Series A", amount="$150 million", valuation="", date="2026-10-20",
-                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", in_focus=True)
+                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", website="", in_focus=True)
     return FundingEvent(**{**base, **kw})
 
 
@@ -69,6 +69,7 @@ def test_event_rows_normalizes_and_dedups():
         "Date": "2026-10-20", "Company": "Eka Robotics", "Funding Round": "Series A", "Amount Raised": "$150M",
         "Valuation": "$1.45B", "Lead Investor": "a16z", "Other Investors": "F-Prime", "Category": "Robotics",
         "Article URL": "https://techcrunch.com/eka", "Date Added": "2026-10-22",
+        "Website": "",
     }
     nova = added[1].values
     assert [nova[h] for h in ("Date", "Company", "Funding Round", "Amount Raised")] == \
@@ -80,7 +81,8 @@ def test_event_rows_normalizes_and_dedups():
 def test_later_report_of_the_same_round_replaces_the_row():
     # Yesterday: round unknown. Today: the same raise reported as a Seed round.
     existing = [_sheet_row(5, "Warhound", "Undisclosed", "2026-10-22", **{"Amount Raised": "$200M",
-                                                                         "Category": "Defense"})]
+                                                                         "Category": "Defense",
+                                                                         "Website": "https://warhound.com"})]
     extraction = Extraction(is_funding_announcement=True, events=[
         _event(company="Warhound", round="Seed", amount="$200M", date="2026-10-23", lead_investor="",
                other_investors=["Anduril"], category=""),
@@ -93,6 +95,8 @@ def test_later_report_of_the_same_round_replaces_the_row():
     # Today's report wins; what it doesn't say is kept from yesterday's row.
     assert (v["Date"], v["Funding Round"], v["Amount Raised"], v["Other Investors"], v["Category"]) == \
         ("2026-10-23", "Seed", "$200M", "Anduril", "Defense")
+    # The Company link read back from the old row carries over to the new one.
+    assert v["Website"] == "https://warhound.com"
 
 
 def test_a_new_round_of_a_known_company_is_a_new_row():

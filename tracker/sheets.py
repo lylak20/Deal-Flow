@@ -9,11 +9,12 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote_plus
 
 import gspread
 
 from collector import Article
-from normalize import EventRecord, event_key
+from normalize import EventRecord, company_website, event_key
 
 # Two databases with the same columns, filled from one run (see config "tracks"):
 #   "all":      every sector, from TechCrunch, PR Newswire and Crunchbase News
@@ -28,7 +29,8 @@ ARTICLE_LOG = "Article Log"
 EMAIL_TEMPLATE = "Email Template"
 
 # "Email" holds a per-row button (formula) that opens a pre-filled Gmail draft; the pipeline itself
-# produces the other columns (see main.event_rows, which leaves Email out).
+# produces the other columns (see main.event_rows, which leaves Email out). The company website is not a
+# column: it is kept as the Company cell's link.
 RAW_HEADERS = [
     "Date", "Email", "Company", "Funding Round", "Amount Raised", "Valuation", "Lead Investor",
     "Other Investors", "Category", "Article URL", "Date Added",
@@ -118,6 +120,36 @@ def add_email_buttons(ws: gspread.Worksheet, first_row: int, last_row: int) -> N
                   f"{EMAIL_COL}{first_row}:{EMAIL_COL}{last_row}", value_input_option="USER_ENTERED")
 
 
+def company_link(values: dict[str, str]) -> str:
+    """The company's website when the article gave one, else a web search for it (one click to pick the site)."""
+    if values.get("Website"):
+        return values["Website"]
+    query = f'{values.get("Company", "")} {values.get("Category", "")} official website'.strip()
+    return "https://www.google.com/search?q=" + quote_plus(query)
+
+
+def add_company_links(ws: gspread.Worksheet, rows: list[tuple[int, dict[str, str]]]) -> None:
+    """Make each Company cell a link (cell formatting, so the value stays the plain company name)."""
+    c = col("Company")
+    formats = [{"range": f"{c}{row}", "format": {"textFormat": {"link": {"uri": company_link(values)}}}}
+               for row, values in rows if values.get("Company")]
+    if formats:
+        ws.batch_format(formats)
+
+
+def company_websites(ws: gspread.Worksheet) -> list[str]:
+    """The website each Company cell links to, from row 2 down ("" for none or a web-search link)."""
+    c = col("Company")
+    meta = ws.spreadsheet.fetch_sheet_metadata({
+        "ranges": f"'{ws.title}'!{c}2:{c}",
+        "fields": "sheets.data.rowData.values.userEnteredFormat.textFormat.link",
+    })
+    rows = meta["sheets"][0]["data"][0].get("rowData", [])
+    uris = [((r.get("values") or [{}])[0].get("userEnteredFormat", {}).get("textFormat", {})
+             .get("link", {}).get("uri", "")) for r in rows]
+    return [company_website(u) for u in uris]
+
+
 def _first_row(append_response: dict) -> int:
     # e.g. "'Article Log'!A12:H14" -> 12
     rng = append_response["updates"]["updatedRange"]
@@ -131,10 +163,13 @@ class SheetStore:
 
     def existing_records(self, track: str) -> list[EventRecord]:
         """Every round already in that track's database tab, read by header name, with its sheet row."""
-        values = self._db[track].get_all_values()
+        ws = self._db[track]
+        values = ws.get_all_values()
         if not values:
             return []
         header = values[0]
+        # Read back so a row replaced by a later report keeps its link.
+        sites = company_websites(ws)
         records = []
         for i, r in enumerate(values[1:], start=2):
             d = dict(zip(header, r))
@@ -142,7 +177,7 @@ class SheetStore:
                 continue
             records.append(EventRecord(
                 event_key(d["Company"], d.get("Funding Round", ""), d.get("Date", "")),
-                {h: d.get(h, "") for h in DATA_HEADERS},
+                {**{h: d.get(h, "") for h in DATA_HEADERS}, "Website": sites[i - 2] if i - 2 < len(sites) else ""},
                 row=i,
             ))
         return records
@@ -177,16 +212,17 @@ class SheetStore:
         return {a.url: LogEntry(row=start + i, article=a, status="pending", attempts=0) for i, a in enumerate(articles)}
 
     def append_events(self, track: str, rows: list[dict[str, str]]) -> None:
-        """rows: {header: value} for every database column except Email."""
+        """rows: {header: value} for every database column except Email, plus "Website" for the Company link."""
         if not rows:
             return
         ws = self._db[track]
         # Data goes in RAW so nothing is reinterpreted (dates stay text, "=..." names stay text) ...
         resp = ws.append_rows([[r.get(h, "") for h in RAW_HEADERS] for r in rows],
                               value_input_option="RAW", table_range="A1")
-        # ... and only the Email buttons are formulas.
+        # ... and only the Email buttons are formulas; Company links are cell formatting.
         start = _first_row(resp)
         add_email_buttons(ws, start, start + len(rows) - 1)
+        add_company_links(ws, [(start + i, r) for i, r in enumerate(rows)])
 
     def update_statuses(self, updates: list[tuple[int, str, int, str]]) -> None:
         """updates: (row, status, attempts, error)."""

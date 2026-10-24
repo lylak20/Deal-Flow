@@ -35,6 +35,9 @@ Field rules:
 - other_investors: other participating investors.
 - category: one short sector label, e.g. "AI Infrastructure", "Robotics", "Fintech", "Healthcare",
   "Biotech", "Defense", "Climate", "Developer Tools", "Security", "Consumer", "Enterprise Software".
+- website: the company's own website, e.g. "https://formic.co". Use only a site that appears in the
+  article text or in its "Links in the article" list and clearly belongs to this company (not an
+  investor, customer or news site). Empty otherwise.
 - in_focus: true for every event when no focus sector is given.
 Never guess: leave a field empty rather than invent it.
 """
@@ -63,6 +66,7 @@ class FundingEvent(BaseModel):
     lead_investor: str
     other_investors: list[str]
     category: str
+    website: str
     in_focus: bool
 
 
