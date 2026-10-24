@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timezone
 
 from collector import Article, is_candidate, parse_feed
-from extractor import Extraction, FundingEvent
+from extractor import Extraction, Founder, FundingEvent
 from main import event_rows
 from normalize import EventRecord, event_key
 
@@ -42,7 +42,8 @@ def test_parse_feed_and_filter():
 
 def _event(**kw):
     base = dict(company="Eka Robotics", round="Series A", amount="$150 million", valuation="", date="2026-10-20",
-                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", website="", in_focus=True)
+                lead_investor="a16z", other_investors=["F-Prime", " "], category="Robotics", founders=[], website="",
+                in_focus=True)
     return FundingEvent(**{**base, **kw})
 
 
@@ -67,9 +68,9 @@ def test_event_rows_normalizes_and_dedups():
     assert (len(added), len(updated), skipped) == (2, 0, 1)
     assert added[0].values == {
         "Date": "2026-10-20", "Company": "Eka Robotics", "Funding Round": "Series A", "Amount Raised": "$150M",
-        "Valuation": "$1.45B", "Lead Investor": "a16z", "Other Investors": "F-Prime", "Category": "Robotics",
-        "Article URL": "https://techcrunch.com/eka", "Date Added": "2026-10-22",
-        "Website": "",
+        "Valuation": "$1.45B", "Lead Investor": "a16z", "Other Investors": "F-Prime", "Founders": "",
+        "Category": "Robotics", "Article URL": "https://techcrunch.com/eka", "Date Added": "2026-10-22",
+        "Website": "", "Founder Links": "",
     }
     nova = added[1].values
     assert [nova[h] for h in ("Date", "Company", "Funding Round", "Amount Raised")] == \
@@ -118,3 +119,17 @@ def test_update_of_a_round_added_earlier_in_the_same_run_stays_one_row():
     added, updated, skipped = event_rows(ARTICLE, extraction, existing, 365, "2026-10-23")
     assert (len(added), len(updated)) == (1, 0)
     assert added[0].values["Funding Round"] == "Seed" and len(existing) == 1
+
+
+def test_founders_are_joined_and_a_later_report_naming_them_updates_the_row():
+    existing = [_sheet_row(5, "Legora", "Series E+", "2026-10-21", **{"Amount Raised": "$550M"})]
+    extraction = Extraction(is_funding_announcement=True, events=[
+        _event(company="Legora", round="Series E", amount="$550M", date="2026-10-21", founders=[
+            Founder(name="Max Junestrand", linkedin="https://www.linkedin.com/in/maxjunestrand"),
+            Founder(name="Sigge Labor", linkedin="")]),
+    ])
+    added, updated, skipped = event_rows(ARTICLE, extraction, existing, 365, "2026-10-22")
+    assert (len(added), len(updated), skipped) == (0, 1, 0)
+    v = updated[0].values
+    assert v["Founders"] == "Max Junestrand, Sigge Labor"
+    assert v["Founder Links"] == "https://www.linkedin.com/in/maxjunestrand|"

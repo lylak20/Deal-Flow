@@ -49,11 +49,14 @@ def event_rows(article: Article, extraction, existing: list[EventRecord], window
             "Valuation": normalize_amount(ev.valuation) if ev.valuation.strip() else "",
             "Lead Investor": ev.lead_investor.strip(),
             "Other Investors": ", ".join(i.strip() for i in ev.other_investors if i.strip()),
+            "Founders": ", ".join(f.name for f in ev.founders),
             "Category": ev.category.strip(),
             "Article URL": article.url,
             "Date Added": today,
             # Not a column: setup and append turn it into the Company cell's link.
             "Website": company_website(ev.website),
+            # Not a column either: each founder's LinkedIn profile ("" if none), "|"-separated in Founders order.
+            "Founder Links": "|".join(f.linkedin for f in ev.founders),
         }
         key = event_key(ev.company, round_, when)
         i = find_match(key, [e.key for e in existing], window)
@@ -67,6 +70,8 @@ def event_rows(article: Article, extraction, existing: list[EventRecord], window
         if merged is None:
             skipped += 1
             continue
+        if values["Founders"]:
+            merged["Founder Links"] = values["Founder Links"]  # the links belong to the names they came with
         # The sheet row (if any) is deleted and the merged round appended as today's row.
         rec = EventRecord(event_key(merged["Company"], merged["Funding Round"], merged["Date"]), merged,
                           replaces=old.replaces + ([old.row] if old.row else []))
@@ -117,9 +122,29 @@ def website_by_name(company: str, sites: list[str]) -> str:
     return matches[0] if len(matches) == 1 else ""
 
 
+def _listed(text: str, heading: str) -> list[str]:
+    """The lines of one link list parser.article_text appended ("Links in the article", ...)."""
+    _, _, rest = text.partition(f"\n\n{heading}:\n")
+    block = rest.split("\n\n", 1)[0]
+    return [line.strip() for line in block.splitlines() if line.strip()]
+
+
 def linked_sites(text: str) -> list[str]:
-    _, _, links = text.partition("\n\nLinks in the article:\n")
-    return [line.strip() for line in links.splitlines() if line.strip()]
+    return _listed(text, "Links in the article")
+
+
+def verified_founders(ev, text: str) -> list:
+    """Named founders, each keeping its LinkedIn URL only if that profile is really linked from the article."""
+    profiles = set(_listed(text, "LinkedIn profiles in the article"))
+    founders, seen = [], set()
+    for f in ev.founders:
+        name = " ".join(f.name.split())
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        url = f.linkedin.strip().rstrip("/")
+        founders.append(f.model_copy(update={"name": name, "linkedin": url if url in profiles else ""}))
+    return founders
 
 
 def verified_website(ev, text: str) -> str:
@@ -209,7 +234,8 @@ def run_extraction(work: list[tuple], extractor, existing: dict[str, list[EventR
         covered.update(company_key(ev.company) for ev in extraction.events)
         if guess:
             covered.add(guess)
-        events = [ev.model_copy(update={"website": verified_website(ev, text)}) for ev in extraction.events]
+        events = [ev.model_copy(update={"website": verified_website(ev, text),
+                                        "founders": verified_founders(ev, text)}) for ev in extraction.events]
         routed = {
             "all": events if "all" in article.tracks else [],
             "robotics": [ev for ev in events if ev.in_focus],

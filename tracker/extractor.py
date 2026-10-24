@@ -38,6 +38,10 @@ Field rules:
 - website: the company's own website, e.g. "https://formic.co". Use only a site that appears in the
   article text or in its "Links in the article" list and clearly belongs to this company (not an
   investor, customer or news site). Empty otherwise.
+- founders: the people the article calls the company's founder or co-founder (a CEO counts only if
+  also called a founder), with linkedin set to their profile URL only if it appears in the article's
+  "LinkedIn profiles in the article" list and clearly belongs to that person; else linkedin is empty.
+  Empty list if the article names no founder.
 - in_focus: true for every event when no focus sector is given.
 Never guess: leave a field empty rather than invent it.
 """
@@ -57,6 +61,11 @@ states and leave the rest empty.
 """
 
 
+class Founder(BaseModel):
+    name: str
+    linkedin: str
+
+
 class FundingEvent(BaseModel):
     company: str
     round: str
@@ -66,6 +75,7 @@ class FundingEvent(BaseModel):
     lead_investor: str
     other_investors: list[str]
     category: str
+    founders: list[Founder]
     website: str
     in_focus: bool
 

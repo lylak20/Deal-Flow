@@ -26,10 +26,24 @@ def outbound_sites(html: str, article_url: str) -> list[str]:
     return sites[:MAX_LINKS]
 
 
+_LINKEDIN_PROFILE = re.compile(r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/in/([A-Za-z0-9%_-]+)", re.IGNORECASE)
+
+
+def linkedin_profiles(html: str) -> list[str]:
+    """LinkedIn profiles (linkedin.com/in/...) the article links to, in order, as https://www.linkedin.com/in/<id>."""
+    profiles = []
+    for slug in _LINKEDIN_PROFILE.findall(html):
+        url = f"https://www.linkedin.com/in/{slug.lower()}"
+        if url not in profiles:
+            profiles.append(url)
+    return profiles[:MAX_LINKS]
+
+
 def article_text(article: Article, config: dict) -> str:
     """Main text of the article, falling back to the RSS title and summary if the page can't be read.
 
-    Sites the article links to are listed at the end, so the company's website can be picked from them.
+    Sites and LinkedIn profiles the article links to are listed at the end, so the company's website and its
+    founders' profiles can be picked from them.
     """
     fallback = f"{article.title}\n\n{article.summary}".strip()
     if is_headline_only(article):
@@ -43,9 +57,11 @@ def article_text(article: Article, config: dict) -> str:
         resp.raise_for_status()
         body = trafilatura.extract(resp.text, include_comments=False, include_tables=False) or ""
         sites = outbound_sites(resp.text, article.url)
+        profiles = linkedin_profiles(resp.text)
     except Exception as e:
         log.warning("Could not read %s (%s); using RSS summary", article.url, e)
-        body, sites = "", []
+        body, sites, profiles = "", [], []
     text = f"{article.title}\n\n{body}" if len(body) > len(article.summary) else fallback
     links = "\n\nLinks in the article:\n" + "\n".join(sites) if sites else ""
+    links += "\n\nLinkedIn profiles in the article:\n" + "\n".join(profiles) if profiles else ""
     return text[: config["max_article_chars"] - len(links)] + links

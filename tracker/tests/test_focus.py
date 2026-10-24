@@ -42,7 +42,7 @@ def art(title, source="TechCrunch", priority=1, headline_only=False, hours_ago=1
 
 def ev(company, in_focus=True, round_="Seed", amount="$10M", category="Industrial Automation", website=""):
     return FundingEvent(company=company, round=round_, amount=amount, valuation="", date="2026-10-23",
-                        lead_investor="", other_investors=[], category=category, website=website,
+                        lead_investor="", other_investors=[], category=category, founders=[], website=website,
                         in_focus=in_focus)
 
 
@@ -267,3 +267,42 @@ def test_website_falls_back_to_a_linked_site_named_after_the_company():
     # No link named after the company (or no links at all): leave it empty rather than guess.
     assert main.verified_website(ev("Kodama", website=""), text) == ""
     assert main.verified_website(ev("Formic", website=""), "Formic raises $50M") == ""
+
+
+# --- Founders ---------------------------------------------------------------------------------------------
+
+def test_founder_linkedin_is_kept_only_if_the_article_links_it():
+    from extractor import Founder
+    text = ("Legora raises $550M\n\nLinks in the article:\nhttps://legora.com"
+            "\n\nLinkedIn profiles in the article:\nhttps://www.linkedin.com/in/maxjunestrand")
+    e = ev("Legora").model_copy(update={"founders": [
+        Founder(name="Max  Junestrand", linkedin="https://www.linkedin.com/in/maxjunestrand/"),
+        Founder(name="Sigge Labor", linkedin="https://www.linkedin.com/in/made-up"),
+        Founder(name="max junestrand", linkedin="")]})
+    founders = main.verified_founders(e, text)
+    assert [(f.name, f.linkedin) for f in founders] == [
+        ("Max Junestrand", "https://www.linkedin.com/in/maxjunestrand"), ("Sigge Labor", "")]
+    # The LinkedIn list doesn't leak into the company-website candidates.
+    assert main.linked_sites(text) == ["https://legora.com"]
+
+
+def test_linkedin_profiles_are_collected_from_the_page():
+    from parser import linkedin_profiles
+    html = ('<a href="https://www.linkedin.com/in/MaxJunestrand/">Max</a> '
+            '<a href="https://linkedin.com/in/maxjunestrand">again</a> '
+            '<a href="https://www.linkedin.com/company/legora">company page</a>')
+    assert linkedin_profiles(html) == ["https://www.linkedin.com/in/maxjunestrand"]
+
+
+def test_founders_cell_links_each_name():
+    from sheets import founder_links, founders_cell
+    values = {"Company": "Legora", "Founders": "Max Junestrand, Sigge Labor",
+              "Founder Links": "https://www.linkedin.com/in/maxjunestrand|"}
+    assert founder_links(values)[1] == ("Sigge Labor", "https://www.google.com/search?q=Sigge+Labor+Legora+linkedin")
+    cell = founders_cell(values)
+    assert cell["userEnteredValue"] == {"stringValue": "Max Junestrand, Sigge Labor"}
+    assert cell["textFormatRuns"] == [
+        {"startIndex": 0, "format": {"link": {"uri": "https://www.linkedin.com/in/maxjunestrand"}}},
+        {"startIndex": 14, "format": {}},
+        {"startIndex": 16, "format": {"link": {"uri": "https://www.google.com/search?q=Sigge+Labor+Legora+linkedin"}}},
+    ]

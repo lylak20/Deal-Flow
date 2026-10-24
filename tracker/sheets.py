@@ -30,10 +30,11 @@ EMAIL_TEMPLATE = "Email Template"
 
 # "Email" holds a per-row button (formula) that opens a pre-filled Gmail draft; the pipeline itself
 # produces the other columns (see main.event_rows, which leaves Email out). The company website is not a
-# column: it is kept as the Company cell's link.
+# column: it is kept as the Company cell's link. Likewise each name in Founders links to that founder's
+# LinkedIn profile (or a search for it).
 RAW_HEADERS = [
     "Date", "Email", "Company", "Funding Round", "Amount Raised", "Valuation", "Lead Investor",
-    "Other Investors", "Category", "Article URL", "Date Added",
+    "Other Investors", "Founders", "Category", "Article URL", "Date Added",
 ]
 # Columns earlier versions had; setup_sheet.py deletes them from existing tabs.
 RETIRED_HEADERS = ["Source", "Website"]
@@ -150,6 +151,67 @@ def company_websites(ws: gspread.Worksheet) -> list[str]:
     return [company_website(u) for u in uris]
 
 
+def _utf16_len(s: str) -> int:
+    # Sheets counts text positions in UTF-16 code units.
+    return len(s.encode("utf-16-le")) // 2
+
+
+def founder_links(values: dict[str, str]) -> list[tuple[str, str]]:
+    """(name, link) per founder: the LinkedIn profile the article gave, else a web search for it."""
+    names = [n for n in values.get("Founders", "").split(", ") if n]
+    profiles = values.get("Founder Links", "").split("|")
+    company = values.get("Company", "")
+    return [(n, profiles[i] if i < len(profiles) and profiles[i]
+             else "https://www.google.com/search?q=" + quote_plus(f"{n} {company} linkedin"))
+            for i, n in enumerate(names)]
+
+
+def founders_cell(values: dict[str, str]) -> dict:
+    """The Founders cell as names joined by ", ", each name its own link (rich-text runs)."""
+    text, runs = "", []
+    for name, uri in founder_links(values):
+        if text:
+            runs.append({"startIndex": _utf16_len(text), "format": {}})  # the ", " between names: no link
+            text += ", "
+        runs.append({"startIndex": _utf16_len(text), "format": {"link": {"uri": uri}}})
+        text += name
+    return {"userEnteredValue": {"stringValue": text}, "textFormatRuns": runs}
+
+
+def add_founder_links(ws: gspread.Worksheet, rows: list[tuple[int, dict[str, str]]]) -> None:
+    """Write each named Founders cell with one link per founder."""
+    c = RAW_HEADERS.index("Founders")
+    requests = [{"updateCells": {
+        "range": {"sheetId": ws.id, "startRowIndex": row - 1, "endRowIndex": row,
+                  "startColumnIndex": c, "endColumnIndex": c + 1},
+        "rows": [{"values": [founders_cell(values)]}],
+        "fields": "userEnteredValue,textFormatRuns",
+    }} for row, values in rows if values.get("Founders")]
+    if requests:
+        ws.spreadsheet.batch_update({"requests": requests})
+
+
+def founder_profiles(ws: gspread.Worksheet) -> list[str]:
+    """Per row from row 2 down, the "Founder Links" value read back from the Founders cell's links."""
+    c = col("Founders")
+    meta = ws.spreadsheet.fetch_sheet_metadata({
+        "ranges": f"'{ws.title}'!{c}2:{c}",
+        "fields": "sheets.data.rowData.values(formattedValue,textFormatRuns)",
+    })
+    out = []
+    for r in meta["sheets"][0]["data"][0].get("rowData", []):
+        cell = (r.get("values") or [{}])[0]
+        links = {run.get("startIndex", 0): run.get("format", {}).get("link", {}).get("uri", "")
+                 for run in cell.get("textFormatRuns", [])}
+        text, start, profiles = cell.get("formattedValue", ""), 0, []
+        for name in text.split(", ") if text else []:
+            uri = links.get(_utf16_len(text[:start]), "")
+            profiles.append(uri if "linkedin.com/in/" in uri else "")
+            start += len(name) + 2
+        out.append("|".join(profiles))
+    return out
+
+
 def _first_row(append_response: dict) -> int:
     # e.g. "'Article Log'!A12:H14" -> 12
     rng = append_response["updates"]["updatedRange"]
@@ -168,16 +230,18 @@ class SheetStore:
         if not values:
             return []
         header = values[0]
-        # Read back so a row replaced by a later report keeps its link.
-        sites = company_websites(ws)
+        # Read back so a row replaced by a later report keeps its links.
+        sites, profiles = company_websites(ws), founder_profiles(ws)
         records = []
         for i, r in enumerate(values[1:], start=2):
             d = dict(zip(header, r))
             if not d.get("Company"):
                 continue
+            links = {"Website": sites[i - 2] if i - 2 < len(sites) else "",
+                     "Founder Links": profiles[i - 2] if i - 2 < len(profiles) else ""}
             records.append(EventRecord(
                 event_key(d["Company"], d.get("Funding Round", ""), d.get("Date", "")),
-                {**{h: d.get(h, "") for h in DATA_HEADERS}, "Website": sites[i - 2] if i - 2 < len(sites) else ""},
+                {**{h: d.get(h, "") for h in DATA_HEADERS}, **links},
                 row=i,
             ))
         return records
@@ -212,17 +276,18 @@ class SheetStore:
         return {a.url: LogEntry(row=start + i, article=a, status="pending", attempts=0) for i, a in enumerate(articles)}
 
     def append_events(self, track: str, rows: list[dict[str, str]]) -> None:
-        """rows: {header: value} for every database column except Email, plus "Website" for the Company link."""
+        """rows: {header: value} for every database column except Email, plus "Website" and "Founder Links"."""
         if not rows:
             return
         ws = self._db[track]
         # Data goes in RAW so nothing is reinterpreted (dates stay text, "=..." names stay text) ...
         resp = ws.append_rows([[r.get(h, "") for h in RAW_HEADERS] for r in rows],
                               value_input_option="RAW", table_range="A1")
-        # ... and only the Email buttons are formulas; Company links are cell formatting.
+        # ... and only the Email buttons are formulas; Company and founder links are cell formatting.
         start = _first_row(resp)
         add_email_buttons(ws, start, start + len(rows) - 1)
         add_company_links(ws, [(start + i, r) for i, r in enumerate(rows)])
+        add_founder_links(ws, [(start + i, r) for i, r in enumerate(rows)])
 
     def update_statuses(self, updates: list[tuple[int, str, int, str]]) -> None:
         """updates: (row, status, attempts, error)."""

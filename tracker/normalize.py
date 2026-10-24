@@ -178,7 +178,7 @@ class EventRecord:
     replaces: list[int] = field(default_factory=list)  # older sheet rows of the same round to delete
 
 
-_INFO_FIELDS = ("Funding Round", "Amount Raised", "Valuation", "Lead Investor", "Other Investors")
+_INFO_FIELDS = ("Funding Round", "Amount Raised", "Valuation", "Lead Investor", "Other Investors", "Founders")
 
 
 def _known(value: str) -> bool:
