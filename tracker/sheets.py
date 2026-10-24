@@ -196,13 +196,15 @@ def founder_profiles(ws: gspread.Worksheet) -> list[str]:
     c = col("Founders")
     meta = ws.spreadsheet.fetch_sheet_metadata({
         "ranges": f"'{ws.title}'!{c}2:{c}",
-        "fields": "sheets.data.rowData.values(formattedValue,textFormatRuns)",
+        "fields": "sheets.data.rowData.values(formattedValue,textFormatRuns,userEnteredFormat.textFormat.link)",
     })
     out = []
     for r in meta["sheets"][0]["data"][0].get("rowData", []):
         cell = (r.get("values") or [{}])[0]
         links = {run.get("startIndex", 0): run.get("format", {}).get("link", {}).get("uri", "")
                  for run in cell.get("textFormatRuns", [])}
+        # A link covering the whole cell (a single founder) is stored on the cell, not as a run.
+        links.setdefault(0, cell.get("userEnteredFormat", {}).get("textFormat", {}).get("link", {}).get("uri", ""))
         text, start, profiles = cell.get("formattedValue", ""), 0, []
         for name in text.split(", ") if text else []:
             uri = links.get(_utf16_len(text[:start]), "")
